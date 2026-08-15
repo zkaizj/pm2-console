@@ -91,6 +91,31 @@ pm2 save
 > - **令牌 = 电脑控制权**：中控台可执行任意命令，令牌泄露等于电脑失守，切勿外传
 > - **切勿把中控台端口映射/暴露到公网**；需要远程访问请走 VPN（如 Tailscale）或 Cloudflare Tunnel + Access
 
+## 🚀 Windows 开机自启（PM2）
+
+PM2 的 `pm2 startup` **不支持 Windows**，用以下方式之一在登录时自动恢复所有服务（`pm2 resurrect`）：
+
+**方式 A：启动文件夹快捷方式（无需管理员，推荐）**
+
+把 `pm2-resurrect.cmd`（或任意执行 `pm2 resurrect` 的脚本）建一个**最小化运行**的快捷方式放进启动文件夹：
+
+```powershell
+$startup = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
+$ws = New-Object -ComObject WScript.Shell
+$sc = $ws.CreateShortcut("$startup\pm2-resurrect.lnk")
+$sc.TargetPath = "D:\path\to\pm2-resurrect.cmd"
+$sc.WindowStyle = 7   # 最小化，登录时不弹窗
+$sc.Save()
+```
+
+**方式 B：计划任务（需要管理员）**
+
+```sh
+schtasks /Create /SC ONLOGON /TN "pm2-resurrect" /TR "D:\path\to\pm2-resurrect.cmd" /F
+```
+
+> 前提：已执行过 `pm2 save`（保存进程清单），且 `PM2_HOME` 环境变量已正确设置（迁移过 PM2 家目录的机器必须显式指定）。
+
 ## 🔌 API 一览
 
 | 方法 | 路径 | 说明 |
