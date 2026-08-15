@@ -153,8 +153,8 @@
   <h2><span class="dnd-handle" title="拖动排序">⋮⋮</span>📋 托管中的服务 <span class="muted" id="countInfo"></span></h2>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>名称</th><th>分类</th><th>状态</th><th>重启</th><th>运行时长</th><th>CPU</th><th>内存</th><th>启动时间</th><th>操作</th><th></th><th></th></tr></thead>
-      <tbody id="tbody"><tr><td colspan="11" class="empty">加载中…</td></tr></tbody>
+      <thead><tr><th>名称</th><th>分类</th><th>状态</th><th>重启</th><th>运行时长</th><th>CPU</th><th>内存</th><th>启动时间</th><th>操作</th><th>日志</th><th>监控</th><th>页面</th></tr></thead>
+      <tbody id="tbody"><tr><td colspan="12" class="empty">加载中…</td></tr></tbody>
     </table>
   </div>
 </div>
@@ -216,6 +216,16 @@
     <div id="depSteps"></div>
     <pre id="depLog" style="max-height:320px;overflow:auto;white-space:pre-wrap;word-break:break-all;font-size:12px"></pre>
     <div class="row" style="margin-top:10px"><button class="small" id="btnCloseDep">关闭</button></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="metaModalBg">
+  <div class="modal">
+    <h3>⚙️ 服务备注与前端页面</h3>
+    <div class="muted" style="font-size:12px;margin-bottom:8px" id="metaTitle"></div>
+    <input type="text" id="metaUrl" placeholder="前端页面地址（如 http://127.0.0.1:8080；留空则不显示「打开」按钮）">
+    <input type="text" id="metaRemark" placeholder="备注（如：管理后台 / 端口 8080）">
+    <div class="row"><button class="primary small" id="btnSaveMeta">保存</button><button class="small" id="btnCloseMeta">关闭</button></div>
   </div>
 </div>
 
@@ -337,11 +347,11 @@ async function loadList() {
     $("connInfo").textContent = "· PM2 已连接";
     const list = FILTER === "全部" ? ALL : ALL.filter((p) => (p.category || "未分类") === FILTER);
     $("countInfo").textContent = `（${list.length}/${ALL.length}）`;
-    if (!list.length) { $("tbody").innerHTML = `<tr><td colspan="11" class="empty">${ALL.length ? "该分类下暂无服务" : "暂无托管服务，用上方表单拉入第一个吧"}</td></tr>`; return; }
+    if (!list.length) { $("tbody").innerHTML = `<tr><td colspan="12" class="empty">${ALL.length ? "该分类下暂无服务" : "暂无托管服务，用上方表单拉入第一个吧"}</td></tr>`; return; }
     const catOptions = ["未分类", ...CATS].map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
     $("tbody").innerHTML = list.map((p) => `
       <tr>
-        <td><b>${esc(p.name)}</b></td>
+        <td><b>${esc(p.name)}</b>${p.remark ? `<div class="muted" style="font-size:11px">${esc(p.remark)}</div>` : ""}</td>
         <td><select class="cat-select" onchange="setCat(${p.id}, this.value)">${catOptions.replace(`value="${esc(p.category||"未分类")}"`, `value="${esc(p.category||"未分类")}" selected`)}</select></td>
         <td><span class="status ${SCLASS[p.status]||"st-unknown"}"><i></i>${SZH[p.status]||p.status}</span></td>
         <td class="mono">${p.restartCount}</td>
@@ -357,6 +367,10 @@ async function loadList() {
         </div></td>
         <td><button class="small" onclick="showLog('${esc(p.name)}',${p.id})">📜 日志</button></td>
         <td><button class="small" onclick="showMon('${esc(p.name)}',${p.id})">📈 监控</button></td>
+        <td><div class="actions">
+          <button class="small" onclick="editMeta('${esc(p.name)}',${p.id})" title="设置备注/页面">⚙️</button>
+          ${p.webUrl ? `<button class="small" onclick="openUrl('${esc(p.webUrl)}')" title="${esc(p.webUrl)}">🌐 打开</button>` : ""}
+        </div></td>
       </tr>`).join("");
   } catch (e) {
     $("dshDot").className = "dot"; $("connInfo").textContent = "· 连接失败";
@@ -656,6 +670,28 @@ function renderModModal() {
 }
 $("btnModules").onclick = () => { renderModModal(); $("modModalBg").style.display = "flex"; };
 $("btnCloseMod").onclick = () => { $("modModalBg").style.display = "none"; };
+
+/* ---------- 服务备注与页面 ---------- */
+let metaProc = null;
+function openUrl(u) { if (u) window.open(u, "_blank"); }
+function editMeta(name, id) {
+  metaProc = { name, id };
+  $("metaTitle").textContent = "服务：" + name;
+  const p = ALL.find((x) => x.id === id);
+  $("metaUrl").value = (p && p.webUrl) || "";
+  $("metaRemark").value = (p && p.remark) || "";
+  $("metaModalBg").style.display = "flex";
+}
+$("btnSaveMeta").onclick = async () => {
+  if (!metaProc) return;
+  try {
+    await api(`/api/processes/${metaProc.id}/meta`, { method: "POST", body: { webUrl: $("metaUrl").value.trim(), remark: $("metaRemark").value.trim() } });
+    $("metaModalBg").style.display = "none";
+    await loadList();
+    toast("已保存");
+  } catch (e) { toast(e.message, true); }
+};
+$("btnCloseMeta").onclick = () => { $("metaModalBg").style.display = "none"; };
 
 /* ---------- 启动 ---------- */
 async function init() {

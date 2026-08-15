@@ -29,12 +29,13 @@ const STATE_FILE = path.join(STATE_DIR, "state.json");
 const DEFAULT_CATEGORIES = ["AI 工具", "Web 服务", "Java 应用", "数据库", "工具"];
 
 /* ---------- 分类状态（持久化） ---------- */
-let state = { categories: [...DEFAULT_CATEGORIES], serviceCategory: {} };
+let state = { categories: [...DEFAULT_CATEGORIES], serviceCategory: {}, serviceMeta: {} };
 function loadState() {
   try {
     const raw = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
     state.categories = Array.isArray(raw.categories) ? raw.categories : [...DEFAULT_CATEGORIES];
     state.serviceCategory = raw.serviceCategory && typeof raw.serviceCategory === "object" ? raw.serviceCategory : {};
+    state.serviceMeta = raw.serviceMeta && typeof raw.serviceMeta === "object" ? raw.serviceMeta : {};
   } catch { /* 首次运行或文件损坏，用默认 */ }
 }
 function saveState() {
@@ -89,7 +90,9 @@ function mapProcess(p) {
     args: env.args || [],
     cwd: env.pm_cwd || null,
     createdAt: env.created_at || null,
-    category: state.serviceCategory[p.name] || "未分类"
+    category: state.serviceCategory[p.name] || "未分类",
+    webUrl: (state.serviceMeta[p.name] || {}).webUrl || null,
+    remark: (state.serviceMeta[p.name] || {}).remark || null
   };
 }
 
@@ -256,6 +259,24 @@ app.post("/api/processes/:id/action", (req, res) => {
     fn(pid, (err) => {
       if (err) return res.status(500).json({ error: err.message });
       res.json({ ok: true, action, id: pid });
+    });
+  });
+});
+
+// 修改服务的备注与前端页面地址
+app.post("/api/processes/:id/meta", (req, res) => {
+  const { webUrl, remark } = req.body || {};
+  withPm2(res, () => {
+    pm2.describe(Number(req.params.id), (err, data) => {
+      if (err) return res.status(500).json({ error: err.message });
+      const proc = Array.isArray(data) ? data[0] : data;
+      if (!proc) return res.status(404).json({ error: "进程不存在" });
+      state.serviceMeta[proc.name] = {
+        webUrl: String(webUrl || "").trim() || null,
+        remark: String(remark || "").trim() || null
+      };
+      saveState();
+      res.json({ ok: true, name: proc.name, meta: state.serviceMeta[proc.name] });
     });
   });
 });
