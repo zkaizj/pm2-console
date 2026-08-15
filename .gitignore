@@ -6,3 +6,5 @@ logs/
 Thumbs.db
 .idea/
 .vscode/
+desktop/node_modules/
+desktop/package-lock.json

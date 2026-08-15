@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="icon" type="image/png" href="favicon.png">
+<link rel="stylesheet" href="vendor/kb-vendor.css">
 <title>PM2 中控台</title>
 <style>
   :root {
@@ -100,6 +101,7 @@
     <button class="nav-item" data-cards="card-projects">📦 项目</button>
     <button class="nav-item" data-cards="card-discover">🔍 进程</button>
     <button class="nav-item" data-cards="card-logsearch">🔎 日志</button>
+    <button class="nav-item" data-cards="card-kb">📚 知识库</button>
   </div>
   <div class="side-foot"><button class="small" id="btnAlerts" style="width:100%">🔔 告警设置</button></div>
 </aside>
@@ -185,6 +187,31 @@
     <button class="primary" id="btnLsSearch">🔍 搜索</button>
   </div>
   <pre id="lsResult" style="max-height:280px;overflow:auto;white-space:pre-wrap;word-break:break-all;font-size:12px;background:#0a0e18;border:1px solid var(--border);border-radius:6px;padding:10px;color:#c8d3ea">输入关键字开始搜索（每文件最近 1MB 内）</pre>
+</div>
+
+<div class="card" id="card-kb" data-module="1" style="padding:0;overflow:hidden">
+  <div style="display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border);flex-wrap:wrap">
+    <h2 style="margin:0">📚 知识库</h2>
+    <span class="muted mono" id="kbRootLabel" style="font-size:12px;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title=""></span>
+    <div style="flex:1"></div>
+    <button class="small" id="btnKbRoot">📁 切换目录</button>
+    <button class="small" id="btnKbNewFile">＋ 文件</button>
+    <button class="small" id="btnKbNewDir">＋ 文件夹</button>
+    <input type="text" id="kbSearch" placeholder="搜索文件名/内容…" style="flex:0 0 200px">
+  </div>
+  <div id="kbBody" style="display:flex;height:calc(100vh - 210px);min-height:420px">
+    <div id="kbTree" style="flex:0 0 240px;border-right:1px solid var(--border);overflow:auto;background:#0d1322;user-select:none"></div>
+    <div id="kbEditorArea" style="flex:1;min-width:0;position:relative;display:flex;flex-direction:column">
+      <div id="kbFileBar" style="display:none;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);background:#0d1322">
+        <b class="mono" id="kbFileName" style="font-size:12px"></b>
+        <span class="muted" id="kbFileDirty" style="font-size:11px"></span>
+        <div style="flex:1"></div>
+        <button class="small" id="btnKbSave" style="background:var(--accent);color:#fff">💾 保存</button>
+      </div>
+      <div id="kbEditor" style="flex:1;min-height:0"></div>
+      <div id="kbEmpty" style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted)">← 从左侧选择一篇 Markdown 笔记，或新建一篇开始记录<br>（编辑器为所见即所得，与 Typora 类似）</div>
+    </div>
+  </div>
 </div>
 </div><!-- /.main -->
 </div><!-- /.layout -->
@@ -280,6 +307,8 @@
 
 <div class="toast" id="toast"></div>
 
+<script src="vendor/kb-vendor.js"></script>
+<script src="kb.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 let TOKEN = localStorage.getItem("consoleToken") || "";
@@ -818,6 +847,13 @@ $("btnSaveAlerts").onclick = async () => {
 
 /* ---------- 启动 ---------- */
 async function init() {
+  // 桌面版：自动注入令牌，免弹窗
+  if (window.desktopEnv && window.desktopEnv.getToken) {
+    try {
+      const t = await window.desktopEnv.getToken();
+      if (t && !TOKEN) { TOKEN = t; localStorage.setItem("consoleToken", t); }
+    } catch { /* 忽略 */ }
+  }
   try {
     const st = await api("/api/status");
     $("subInfo").textContent = `绑定 ${location.host} · 令牌已启用 · ${new Date(st.serverTime).toLocaleString()}`;
@@ -831,6 +867,7 @@ async function init() {
   await Promise.allSettled([loadCats(), loadList(), loadProjects(), loadHealth()]);
   setInterval(loadList, 3000);
   setInterval(loadHealth, 10000);
+  if (window.kbInit) kbInit();
 }
 init();
 </script>
