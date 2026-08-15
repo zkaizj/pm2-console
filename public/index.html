@@ -93,7 +93,7 @@
 <body>
 <div class="layout">
 <aside class="sidebar">
-  <div class="brand"><span class="dot" id="dshDot"></span>PM2 中控台</div>
+  <div class="brand"><span class="dot" id="dshDot"></span>PM2 中控台 <span class="muted" id="connInfo" style="font-size:11px"></span></div>
   <div class="nav" id="navList">
     <button class="nav-item" data-cards="card-overview">🏥 总览</button>
     <button class="nav-item" data-cards="card-pullin,card-services">📋 服务</button>
@@ -105,7 +105,7 @@
 </aside>
 <div class="main">
 <div id="errBanner" style="display:none;background:#3a1d1d;border:1px solid var(--red);color:#fca5a5;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px"></div>
-<div class="sub" id="subInfo">正在连接… <span class="muted" id="connInfo"></span></div>
+<div class="sub" id="subInfo">正在连接…</div>
 
 <div class="chips" id="chips"></div>
 
@@ -422,8 +422,10 @@ async function loadList() {
         </div></td>
       </tr>`).join("");
   } catch (e) {
-    $("dshDot").className = "dot"; $("connInfo").textContent = "· 连接失败";
-    $("tbody").innerHTML = `<tr><td colspan="12" class="empty">${esc(e.message)}</td></tr>`;
+    const dot = $("dshDot"); if (dot) dot.className = "dot";
+    const ci = $("connInfo"); if (ci) ci.textContent = "· 连接失败";
+    const tb = $("tbody"); if (tb) tb.innerHTML = `<tr><td colspan="12" class="empty">${esc(e.message)}</td></tr>`;
+    showBanner("服务列表加载失败：" + e.message);
   }
   fillLsService();
 }
