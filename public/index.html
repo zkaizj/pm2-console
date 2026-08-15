@@ -104,6 +104,7 @@
   <div class="side-foot"><button class="small" id="btnAlerts" style="width:100%">🔔 告警设置</button></div>
 </aside>
 <div class="main">
+<div id="errBanner" style="display:none;background:#3a1d1d;border:1px solid var(--red);color:#fca5a5;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px"></div>
 <div class="sub" id="subInfo">正在连接… <span class="muted" id="connInfo"></span></div>
 
 <div class="chips" id="chips"></div>
@@ -289,8 +290,9 @@ async function api(path, opts = {}) {
   if (opts.body) headers["Content-Type"] = "application/json";
   const res = await fetch(path, { method: opts.method || "GET", headers, body: opts.body ? JSON.stringify(opts.body) : undefined });
   if (res.status === 401) {
-    const t = prompt("请输入中控台令牌（服务端 CONSOLE_TOKEN，默认 admin）:");
-    if (t === null) throw new Error("未授权");
+    showBanner("令牌无效或未设置 —— 请在下方弹窗中输入正确令牌（服务端 CONSOLE_TOKEN）");
+    const t = prompt("请输入中控台令牌（服务端 CONSOLE_TOKEN）:");
+    if (t === null) throw new Error("未授权：令牌无效");
     TOKEN = t; localStorage.setItem("consoleToken", t);
     return api(path, opts);
   }
@@ -302,6 +304,12 @@ function toast(msg, isErr = false) {
   const el = $("toast"); el.textContent = msg; el.className = "toast" + (isErr ? " err" : ""); el.style.display = "block";
   clearTimeout(el._t); el._t = setTimeout(() => (el.style.display = "none"), 3500);
 }
+function showBanner(msg) {
+  const el = $("errBanner");
+  el.style.display = "block";
+  el.innerHTML = `⚠️ ${esc(msg)} <button class="small" style="float:right" onclick="location.reload()">刷新</button>`;
+}
+window.onerror = (msg, src, line) => { showBanner("页面脚本错误：" + msg + "（行 " + line + "）"); };
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 function shortPath(p){ if(!p) return "-"; const s=p.replace(/\\/g,"/"); return s.length>40 ? "…"+s.slice(-40) : s; }
 function fmtUptime(ms){ if(ms===null||ms===undefined) return "-"; let s=Math.floor(ms/1000); const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600),m=Math.floor((s%3600)/60); s%=60;
@@ -320,21 +328,23 @@ const TM_PLACEHOLDER = {
 
 /* ---------- 分类 ---------- */
 async function loadCats() {
-  const d = await api("/api/categories");
-  CATS = d.categories || [];
-  const sc = d.serviceCategory || {};
-  const fillCatSelect = (sel, cur) => {
-    const opts = [...CATS, "未分类"];
-    sel.innerHTML = opts.map((c) => `<option value="${esc(c)}" ${c === cur ? "selected" : ""}>${esc(c)}</option>`)
-      + `<option value="__new__">＋ 新分类…</option>`;
-  };
-  fillCatSelect($("inCategory"), null);
-  const chips = $("chips");
-  const count = (c) => { let n = 0; for (const k in sc) if ((sc[k] || "未分类") === c) n++; return n; };
-  chips.innerHTML = `<span class="chip ${FILTER==="全部"?"active":""}" data-f="全部">全部 <span class="n">${Object.keys(sc).length}</span></span>`
-    + [...CATS.map((c) => `<span class="chip ${FILTER===c?"active":""}" data-f="${esc(c)}">${esc(c)} <span class="n">${count(c)}</span></span>`),
-       `<span class="chip ${FILTER==="未分类"?"active":""}" data-f="未分类">未分类 <span class="n">${count("未分类")}</span></span>`].join("");
-  chips.querySelectorAll(".chip").forEach((ch) => ch.onclick = () => { FILTER = ch.dataset.f; loadCats(); loadList(); });
+  try {
+    const d = await api("/api/categories");
+    CATS = d.categories || [];
+    const sc = d.serviceCategory || {};
+    const fillCatSelect = (sel, cur) => {
+      const opts = [...CATS, "未分类"];
+      sel.innerHTML = opts.map((c) => `<option value="${esc(c)}" ${c === cur ? "selected" : ""}>${esc(c)}</option>`)
+        + `<option value="__new__">＋ 新分类…</option>`;
+    };
+    fillCatSelect($("inCategory"), null);
+    const chips = $("chips");
+    const count = (c) => { let n = 0; for (const k in sc) if ((sc[k] || "未分类") === c) n++; return n; };
+    chips.innerHTML = `<span class="chip ${FILTER==="全部"?"active":""}" data-f="全部">全部 <span class="n">${Object.keys(sc).length}</span></span>`
+      + [...CATS.map((c) => `<span class="chip ${FILTER===c?"active":""}" data-f="${esc(c)}">${esc(c)} <span class="n">${count(c)}</span></span>`),
+         `<span class="chip ${FILTER==="未分类"?"active":""}" data-f="未分类">未分类 <span class="n">${count("未分类")}</span></span>`].join("");
+    chips.querySelectorAll(".chip").forEach((ch) => ch.onclick = () => { FILTER = ch.dataset.f; loadCats(); loadList(); });
+  } catch (e) { showBanner("分类加载失败：" + e.message); }
 }
 
 $("inTemplate").onchange = () => {
@@ -788,10 +798,7 @@ async function init() {
     const valid = document.querySelector(`.nav-item[data-cards="${saved}"]`);
     showModule(valid ? saved : "card-overview");
   }
-  await loadCats();
-  await loadList();
-  await loadProjects();
-  await loadHealth();
+  await Promise.allSettled([loadCats(), loadList(), loadProjects(), loadHealth()]);
   setInterval(loadList, 3000);
   setInterval(loadHealth, 10000);
 }
