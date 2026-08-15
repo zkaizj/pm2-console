@@ -1,0 +1,24 @@
+<div class="card" id="card-kb" data-module="1" data-plugin="kb" style="padding:0;overflow:hidden">
+  <div style="display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border);flex-wrap:wrap">
+    <h2 style="margin:0">📚 知识库</h2>
+    <span class="muted mono" id="kbRootLabel" style="font-size:12px;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title=""></span>
+    <div style="flex:1"></div>
+    <button class="small" id="btnKbRoot">📁 切换目录</button>
+    <button class="small" id="btnKbNewFile">＋ 文件</button>
+    <button class="small" id="btnKbNewDir">＋ 文件夹</button>
+    <input type="text" id="kbSearch" placeholder="搜索文件名/内容…" style="flex:0 0 200px">
+  </div>
+  <div id="kbBody" style="display:flex;height:calc(100vh - 210px);min-height:420px">
+    <div id="kbTree" style="flex:0 0 240px;border-right:1px solid var(--border);overflow:auto;background:#0d1322;user-select:none"></div>
+    <div id="kbEditorArea" style="flex:1;min-width:0;position:relative;display:flex;flex-direction:column">
+      <div id="kbFileBar" style="display:none;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);background:#0d1322">
+        <b class="mono" id="kbFileName" style="font-size:12px"></b>
+        <span class="muted" id="kbFileDirty" style="font-size:11px"></span>
+        <div style="flex:1"></div>
+        <button class="small" id="btnKbSave" style="background:var(--accent);color:#fff">💾 保存</button>
+      </div>
+      <div id="kbEditor" style="flex:1;min-height:0"></div>
+      <div id="kbEmpty" style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted)">← 从左侧选择一篇 Markdown 笔记，或新建一篇开始记录<br>（编辑器为所见即所得，与 Typora 类似）</div>
+    </div>
+  </div>
+</div>

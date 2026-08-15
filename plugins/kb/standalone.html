@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>知识库</title>
+<style>
+  :root { --bg:#0f1420; --panel:#171e2e; --panel2:#1d2740; --border:#2a3550; --text:#e6ebf5; --muted:#8b97b3; --accent:#4f8cff; }
+  * { box-sizing:border-box; margin:0; padding:0 }
+  html, body { height:100% }
+  body { background:var(--bg); color:var(--text); font:14px/1.6 "Microsoft YaHei",system-ui,sans-serif; display:flex; flex-direction:column; overflow:hidden }
+  #kbApp { display:flex; flex-direction:column; flex:1; min-height:0 }
+</style>
+<link rel="stylesheet" href="vendor/kb-vendor.css">
+</head>
+<body>
+<div id="kbApp"></div>
+<script src="vendor/kb-vendor.js"></script>
+<script src="kb.js"></script>
+<script>
+  window.addEventListener("DOMContentLoaded", () => {
+    if (window.kbPlugin) window.kbPlugin.standalone();
+  });
+</script>
+</body>
+</html>

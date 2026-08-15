@@ -4,9 +4,9 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
-// 知识库编辑器 vendor 打包：输出到 public/vendor/
+// 知识库编辑器 vendor 打包：输出到 plugins/kb/vendor/
 export default defineConfig({
-  publicDir: false, // 不复制 public/ 里的静态资源（outDir 就是 public/vendor）
+  publicDir: false, // 不复制 public/ 里的静态资源
   build: {
     lib: {
       entry: resolve(__dirname, "kb-vendor/main.js"),
@@ -14,7 +14,7 @@ export default defineConfig({
       formats: ["iife"],
       fileName: () => "kb-vendor.js"
     },
-    outDir: resolve(__dirname, "public/vendor"),
+    outDir: resolve(__dirname, "plugins/kb/vendor"),
     emptyOutDir: false,
     cssFileName: "kb-vendor",
     minify: "esbuild",

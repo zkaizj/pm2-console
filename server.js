@@ -792,150 +792,125 @@ app.get("/api/projects/:id/deploys/:deployId", (req, res) => {
   res.json(dep);
 });
 
-/* ================= 知识库（Markdown 笔记） ================= */
-const KB_DEFAULT_ROOT = path.join(__dirname, "kb");
-const KB_SKIP_DIRS = new Set(["node_modules", ".git", ".svn", ".hg", "dist", ".next", ".vite", ".runtime", "out", "build", "data"]);
+/* ================= 插件系统（可插拔，插件目录 plugins/<id>/） =================
+ * 插件规范：
+ *  - plugins/<id>/manifest.json  必需：{ id, name, version, description, icon, cardHtml, script, css[], standalone? }
+ *  - plugins/<id>/server.js      可选：module.exports.register(app, ctx) 注册 /api 路由
+ *  - plugins/<id>/card.html      可选：卡片 HTML 片段（插入 .main 区域）
+ *  - plugins/<id>/<script>       可选：前端 JS（在卡片区域注入后加载）
+ *  - plugins/<id>/standalone.html 可选：独立页面入口（浏览器/独立 Electron 可打开）
+ *  静态资源：/plugins/<id>/* 直接映射到插件目录
+ */
+const PLUGINS_DIR = path.join(__dirname, "plugins");
+const plugins = [];
 
-function kbRoot() {
-  const r = process.env.KB_ROOT || state.settings.kbRoot || KB_DEFAULT_ROOT;
-  return r;
-}
-function kbInside(root, p) {
-  const rel = path.relative(path.resolve(root), path.resolve(p));
-  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
-}
-function kbTree(dir, depth = 0) {
-  if (depth > 14) return { children: [] };
-  let entries;
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return { children: [] }; }
-  const children = [];
-  for (const ent of entries) {
-    if (ent.name.startsWith(".")) continue;
-    const full = path.join(dir, ent.name);
-    if (ent.isDirectory()) {
-      if (KB_SKIP_DIRS.has(ent.name)) continue;
-      const sub = kbTree(full, depth + 1);
-      children.push({ type: "dir", name: ent.name, path: full, children: sub.children });
-    } else if (ent.isFile() && /\.(md|markdown|txt)$/i.test(ent.name)) {
-      children.push({ type: "file", name: ent.name, path: full });
+function loadPlugins() {
+  plugins.length = 0;
+  if (!fs.existsSync(PLUGINS_DIR)) return;
+  for (const ent of fs.readdirSync(PLUGINS_DIR, { withFileTypes: true })) {
+    if (!ent.isDirectory()) continue;
+    const dir = path.join(PLUGINS_DIR, ent.name);
+    const mf = path.join(dir, "manifest.json");
+    if (!fs.existsSync(mf)) continue;
+    try {
+      const manifest = JSON.parse(fs.readFileSync(mf, "utf8"));
+      const id = manifest.id || ent.name;
+      plugins.push({
+        id,
+        dir,
+        manifest: Object.assign({ name: id, version: "0.0.0", description: "", icon: "🧩", cardHtml: null, script: null, scripts: null, css: [], standalone: null }, manifest),
+        enabled: state.pluginEnabled !== false && (state.pluginEnabledIds ? state.pluginEnabledIds.includes(id) : true)
+      });
+      console.log(`[plugins] 发现: ${id} v${manifest.version || "0.0.0"} ${manifest.description || ""}`);
+    } catch (e) {
+      console.error(`[plugins] 加载 ${ent.name} 失败:`, e.message);
     }
   }
-  children.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name, "zh-Hans-CN") : a.type === "dir" ? -1 : 1));
-  return { children };
 }
 
-app.get("/api/kb/root", (req, res) => {
-  const root = kbRoot();
-  if (!fs.existsSync(root)) { try { fs.mkdirSync(root, { recursive: true }); } catch {} }
-  res.json({ ok: true, root });
-});
-app.post("/api/kb/root", (req, res) => {
-  const b = req.body || {};
-  const dir = String(b.root || "").trim();
-  if (!dir) return res.status(400).json({ error: "缺少目录" });
-  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return res.status(400).json({ error: "目录不存在或不是文件夹" });
-  state.settings.kbRoot = dir;
+/* 插件启用状态持久化（state.pluginEnabledIds = 启用列表；缺省=全部启用） */
+function pluginEnabled(id) {
+  if (state.pluginEnabledIds === undefined) return true;
+  return state.pluginEnabledIds.includes(id);
+}
+function setPluginEnabled(id, on) {
+  let list = Array.isArray(state.pluginEnabledIds) ? [...state.pluginEnabledIds] : plugins.map((p) => p.id);
+  const set = new Set(list);
+  if (on) set.add(id); else set.delete(id);
+  state.pluginEnabledIds = [...set];
   saveState();
-  res.json({ ok: true, root: dir });
-});
-app.get("/api/kb/tree", (req, res) => {
-  const root = kbRoot();
-  if (!fs.existsSync(root)) { try { fs.mkdirSync(root, { recursive: true }); } catch {} }
-  res.json({ ok: true, root, tree: kbTree(root).children });
-});
-app.get("/api/kb/read", (req, res) => {
-  const root = kbRoot();
-  const p = String(req.query.path || "");
-  if (!kbInside(root, p)) return res.status(400).json({ error: "路径越界" });
-  try { res.json({ ok: true, content: fs.readFileSync(p, "utf8") }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
-app.post("/api/kb/write", (req, res) => {
-  const root = kbRoot();
-  const b = req.body || {};
-  const p = String(b.path || "");
-  if (!kbInside(root, p)) return res.status(400).json({ error: "路径越界" });
+}
+
+/* 挂载插件静态资源 */
+loadPlugins();
+for (const p of plugins) {
+  app.use(`/plugins/${p.id}`, express.static(p.dir));
+}
+
+/* 插件 API 启用检查：请求命中插件声明的 apiPrefix 时，禁用则拒绝（即时生效，无需重启） */
+for (const p of plugins) {
+  if (!p.manifest.apiPrefix) continue;
+  const prefix = p.manifest.apiPrefix;
+  app.use(prefix, (req, res, next) => {
+    if (pluginEnabled(p.id)) return next();
+    res.status(404).json({ error: `插件「${p.manifest.name}」已禁用` });
+  });
+}
+
+/* 注册插件服务端模块（仅启用者） */
+for (const p of plugins) {
+  if (!pluginEnabled(p.id)) continue;
+  const srv = path.join(p.dir, "server.js");
+  if (!fs.existsSync(srv)) continue;
   try {
-    fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.writeFileSync(p, String(b.content ?? ""), "utf8");
-    res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-app.post("/api/kb/create", (req, res) => {
-  const root = kbRoot();
-  const b = req.body || {};
-  const dir = String(b.dir || "");
-  const name = String(b.name || "").trim();
-  const isDir = !!b.isDir;
-  if (!kbInside(root, dir)) return res.status(400).json({ error: "路径越界" });
-  if (!name || /[\\/:*?"<>|]/.test(name)) return res.status(400).json({ error: "名称含非法字符" });
-  let target = path.join(dir, name), i = 1;
-  while (fs.existsSync(target)) {
-    const ext = path.extname(name), base = ext && !isDir ? name.slice(0, -ext.length) : name;
-    target = path.join(dir, `${base} (${i})${ext}`); i++;
-  }
-  try {
-    if (isDir) fs.mkdirSync(target, { recursive: true });
-    else fs.writeFileSync(target, "", "utf8");
-    res.json({ ok: true, path: target });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-app.post("/api/kb/rename", (req, res) => {
-  const root = kbRoot();
-  const b = req.body || {};
-  const oldP = String(b.path || "");
-  const newName = String(b.name || "").trim();
-  if (!kbInside(root, oldP)) return res.status(400).json({ error: "路径越界" });
-  if (!newName || /[\\/:*?"<>|]/.test(newName)) return res.status(400).json({ error: "名称含非法字符" });
-  const target = path.join(path.dirname(oldP), newName);
-  if (fs.existsSync(target)) return res.status(400).json({ error: "同名项已存在" });
-  try { fs.renameSync(oldP, target); res.json({ ok: true, path: target }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
-app.post("/api/kb/delete", (req, res) => {
-  const root = kbRoot();
-  const b = req.body || {};
-  const p = String(b.path || "");
-  if (!kbInside(root, p)) return res.status(400).json({ error: "路径越界" });
-  try { fs.rmSync(p, { recursive: true, force: true }); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
-app.get("/api/kb/search", (req, res) => {
-  const root = kbRoot();
-  const q = String(req.query.q || "").trim().toLowerCase();
-  if (!q) return res.json({ ok: true, hits: [] });
-  if (!fs.existsSync(root)) return res.json({ ok: true, hits: [] });
-  const hits = [];
-  const walk = (dir, depth) => {
-    if (depth > 14) return;
-    let entries;
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    for (const ent of entries) {
-      if (ent.name.startsWith(".")) continue;
-      const full = path.join(dir, ent.name);
-      if (ent.isDirectory()) {
-        if (KB_SKIP_DIRS.has(ent.name)) continue;
-        walk(full, depth + 1);
-      } else if (ent.isFile() && /\.(md|markdown|txt)$/i.test(ent.name)) {
-        let content = "";
-        try { content = fs.readFileSync(full, "utf8"); } catch { continue; }
-        const inName = ent.name.toLowerCase().includes(q);
-        const inContent = content.toLowerCase().includes(q);
-        if (inName || inContent) {
-          let snippet = "";
-          const idx = inContent ? content.toLowerCase().indexOf(q) : -1;
-          if (idx >= 0) {
-            const start = Math.max(0, idx - 60), end = Math.min(content.length, idx + q.length + 80);
-            snippet = (start > 0 ? "…" : "") + content.slice(start, end).replace(/\s+/g, " ").trim() + (end < content.length ? "…" : "");
-          }
-          hits.push({ path: full, rel: path.relative(root, full), inName, inContent, snippet });
-        }
-      }
+    const mod = require(srv);
+    if (typeof mod.register === "function") {
+      mod.register(app, {
+        auth,
+        state,
+        saveState,
+        express,
+        path,
+        fs,
+        TOKEN
+      });
+      console.log(`[plugins] 已注册服务端: ${p.id}`);
     }
-  };
-  walk(root, 0);
-  hits.sort((a, b) => (a.inName === b.inName ? a.rel.localeCompare(b.rel, "zh-Hans-CN") : a.inName ? -1 : 1));
-  res.json({ ok: true, hits });
+  } catch (e) {
+    console.error(`[plugins] ${p.id} 服务端加载失败:`, e.message);
+  }
+}
+
+/* 插件列表 / 启停管理 API */
+app.get("/api/plugins", (req, res) => {
+  res.json({
+    ok: true,
+    plugins: plugins.map((p) => ({
+      id: p.id,
+      name: p.manifest.name,
+      version: p.manifest.version,
+      description: p.manifest.description,
+      icon: p.manifest.icon,
+      cardHtml: p.manifest.cardHtml,
+      script: p.manifest.script,
+      scripts: p.manifest.scripts,
+      css: p.manifest.css || [],
+      standalone: p.manifest.standalone,
+      enabled: pluginEnabled(p.id)
+    }))
+  });
+});
+app.post("/api/plugins/:id/enable", (req, res) => {
+  const p = plugins.find((x) => x.id === req.params.id);
+  if (!p) return res.status(404).json({ error: "插件不存在" });
+  setPluginEnabled(p.id, true);
+  res.json({ ok: true, enabled: true, id: p.id });
+});
+app.post("/api/plugins/:id/disable", (req, res) => {
+  const p = plugins.find((x) => x.id === req.params.id);
+  if (!p) return res.status(404).json({ error: "插件不存在" });
+  setPluginEnabled(p.id, false);
+  res.json({ ok: true, enabled: false, id: p.id });
 });
 
 /* ---------- 启动 ---------- */
@@ -943,4 +918,5 @@ app.listen(PORT, HOST, () => {
   console.log(`[pm2-console] 中控台已启动: http://${HOST}:${PORT}`);
   console.log(`[pm2-console] 令牌: ${TOKEN === "admin" ? "admin（默认，建议设置 CONSOLE_TOKEN 修改）" : "已自定义"}`);
   console.log(`[pm2-console] 状态文件: ${STATE_FILE}`);
+  console.log(`[pm2-console] 插件: ${plugins.length} 个（启用 ${plugins.filter((p) => pluginEnabled(p.id)).length} 个）`);
 });

@@ -1,0 +1,15 @@
+{
+  "id": "kb",
+  "name": "知识库",
+  "version": "1.0.0",
+  "description": "Markdown 知识库：层级目录树 + 所见即所得编辑（类 Typora），可独立运行",
+  "icon": "📚",
+  "apiPrefix": "/api/kb",
+  "cardHtml": "card.html",
+  "scripts": ["vendor/kb-vendor.js", "kb.js"],
+  "css": ["vendor/kb-vendor.css"],
+  "standalone": {
+    "html": "standalone.html",
+    "title": "知识库"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "pm2-console-plugin-kb",
+  "version": "1.0.0",
+  "private": true,
+  "description": "知识库插件（含独立 Electron 运行入口 standalone-main.mjs）"
+}

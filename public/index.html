@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="icon" type="image/png" href="favicon.png">
-<link rel="stylesheet" href="vendor/kb-vendor.css">
 <title>PM2 中控台</title>
 <style>
   :root {
@@ -101,9 +100,12 @@
     <button class="nav-item" data-cards="card-projects">📦 项目</button>
     <button class="nav-item" data-cards="card-discover">🔍 进程</button>
     <button class="nav-item" data-cards="card-logsearch">🔎 日志</button>
-    <button class="nav-item" data-cards="card-kb">📚 知识库</button>
+    <!-- 插件导航项由 loadPlugins() 动态注入 -->
   </div>
-  <div class="side-foot"><button class="small" id="btnAlerts" style="width:100%">🔔 告警设置</button></div>
+  <div class="side-foot">
+    <button class="small" id="btnPlugins" style="width:100%;margin-bottom:6px">🧩 插件管理</button>
+    <button class="small" id="btnAlerts" style="width:100%">🔔 告警设置</button>
+  </div>
 </aside>
 <div class="main">
 <div id="errBanner" style="display:none;background:#3a1d1d;border:1px solid var(--red);color:#fca5a5;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px"></div>
@@ -188,31 +190,7 @@
   </div>
   <pre id="lsResult" style="max-height:280px;overflow:auto;white-space:pre-wrap;word-break:break-all;font-size:12px;background:#0a0e18;border:1px solid var(--border);border-radius:6px;padding:10px;color:#c8d3ea">输入关键字开始搜索（每文件最近 1MB 内）</pre>
 </div>
-
-<div class="card" id="card-kb" data-module="1" style="padding:0;overflow:hidden">
-  <div style="display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border);flex-wrap:wrap">
-    <h2 style="margin:0">📚 知识库</h2>
-    <span class="muted mono" id="kbRootLabel" style="font-size:12px;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title=""></span>
-    <div style="flex:1"></div>
-    <button class="small" id="btnKbRoot">📁 切换目录</button>
-    <button class="small" id="btnKbNewFile">＋ 文件</button>
-    <button class="small" id="btnKbNewDir">＋ 文件夹</button>
-    <input type="text" id="kbSearch" placeholder="搜索文件名/内容…" style="flex:0 0 200px">
-  </div>
-  <div id="kbBody" style="display:flex;height:calc(100vh - 210px);min-height:420px">
-    <div id="kbTree" style="flex:0 0 240px;border-right:1px solid var(--border);overflow:auto;background:#0d1322;user-select:none"></div>
-    <div id="kbEditorArea" style="flex:1;min-width:0;position:relative;display:flex;flex-direction:column">
-      <div id="kbFileBar" style="display:none;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);background:#0d1322">
-        <b class="mono" id="kbFileName" style="font-size:12px"></b>
-        <span class="muted" id="kbFileDirty" style="font-size:11px"></span>
-        <div style="flex:1"></div>
-        <button class="small" id="btnKbSave" style="background:var(--accent);color:#fff">💾 保存</button>
-      </div>
-      <div id="kbEditor" style="flex:1;min-height:0"></div>
-      <div id="kbEmpty" style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted)">← 从左侧选择一篇 Markdown 笔记，或新建一篇开始记录<br>（编辑器为所见即所得，与 Typora 类似）</div>
-    </div>
-  </div>
-</div>
+<!-- 插件卡片由 loadPlugins() 动态注入 -->
 </div><!-- /.main -->
 </div><!-- /.layout -->
 
@@ -307,8 +285,15 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="vendor/kb-vendor.js"></script>
-<script src="kb.js"></script>
+<div class="modal-bg" id="pluginModalBg">
+  <div class="modal" style="width:560px">
+    <h3>🧩 插件管理</h3>
+    <div class="hint" style="margin-bottom:10px">插件可插拔：启用的插件会出现在侧边栏；禁用后不加载其页面与接口（服务端 API 也不注册）。插件目录可独立运行。</div>
+    <div id="pluginList"></div>
+    <div class="row" style="margin-top:12px"><button class="small" id="btnClosePlugins">关闭</button></div>
+  </div>
+</div>
+
 <script>
 const $ = (id) => document.getElementById(id);
 let TOKEN = localStorage.getItem("consoleToken") || "";
@@ -845,6 +830,109 @@ $("btnSaveAlerts").onclick = async () => {
   } catch (e) { toast(e.message, true); }
 };
 
+/* ---------- 插件系统（动态注入导航/卡片/脚本 + 管理弹窗） ---------- */
+let PLUGIN_LIST = [];
+const loadedPluginScripts = new Set();
+
+function injectPluginNav(p) {
+  const btn = document.createElement("button");
+  btn.className = "nav-item";
+  btn.dataset.cards = `card-${p.id}`;
+  btn.dataset.plugin = p.id;
+  btn.textContent = `${p.icon} ${p.name}`;
+  btn.onclick = () => showModule(btn.dataset.cards);
+  document.getElementById("navList").appendChild(btn);
+}
+
+async function loadPluginCard(p) {
+  if (!p.cardHtml) return;
+  const card = document.querySelector(`#card-${p.id}`);
+  if (card) return;
+  const res = await fetch(`/plugins/${p.id}/${p.cardHtml}`);
+  if (!res.ok) return;
+  const html = await res.text();
+  const main = document.querySelector(".main");
+  const holder = document.createElement("div");
+  holder.innerHTML = html.trim();
+  const node = holder.firstElementChild;
+  if (node) main.appendChild(node);
+}
+
+function loadPluginScript(p) {
+  const list = p.scripts && p.scripts.length ? p.scripts : (p.script ? [p.script] : []);
+  const proms = [];
+  for (const s of list) {
+    if (loadedPluginScripts.has(s)) continue;
+    loadedPluginScripts.add(s);
+    const el = document.createElement("script");
+    el.src = `/plugins/${p.id}/${s}`;
+    document.body.appendChild(el);
+    proms.push(new Promise((res, rej) => { el.onload = res; el.onerror = () => rej(new Error(`脚本加载失败: ${s}`)); }));
+  }
+  return Promise.all(proms);
+}
+
+function loadPluginCss(p) {
+  for (const css of p.css || []) {
+    if (document.querySelector(`link[data-plugin-css="${p.id}-${css}"]`)) continue;
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = `/plugins/${p.id}/${css}`;
+    link.dataset.pluginCss = `${p.id}-${css}`;
+    document.head.appendChild(link);
+  }
+}
+
+async function loadPlugins() {
+  try {
+    const d = await api("/api/plugins");
+    PLUGIN_LIST = d.plugins || [];
+    const enabled = PLUGIN_LIST.filter((p) => p.enabled);
+    for (const p of enabled) {
+      loadPluginCss(p);
+      injectPluginNav(p);
+      await loadPluginCard(p);
+    }
+    for (const p of enabled) {
+      await loadPluginScript(p);
+    }
+    // 插件脚本加载后调用其 init（约定：window[<id>Plugin].init 或 kbPlugin.init）
+    for (const p of enabled) {
+      const fn = window[`${p.id}Plugin`];
+      if (fn && typeof fn.init === "function") { try { await fn.init(); } catch (e) { console.error(`[plugin:${p.id}] init error`, e); } }
+    }
+    // 重新应用保存的导航（插件加载后再判断，避免刷新后回退总览）
+    const saved = localStorage.getItem(NAV_KEY);
+    const valid = saved && document.querySelector(`.nav-item[data-cards="${saved}"]`);
+    showModule(valid ? saved : "card-overview");
+  } catch (e) { console.error("加载插件失败:", e.message); }
+}
+
+/* 插件管理弹窗 */
+async function openPluginModal() {
+  const box = $("pluginList");
+  box.innerHTML = "";
+  for (const p of PLUGIN_LIST) {
+    const item = document.createElement("div");
+    item.className = "item";
+    item.innerHTML = `
+      <span class="name">${p.icon} <b>${esc(p.name)}</b> <span class="muted" style="font-size:11px">v${esc(p.version)}</span>
+        <div style="font-size:11px;color:var(--muted)">${esc(p.description)}${p.standalone ? ` · <a href="/plugins/${esc(p.id)}/${esc(p.standalone.html)}" target="_blank" style="color:var(--accent2)">独立打开 ↗</a>` : ""}</div></span>
+      <label style="flex:none;display:flex;align-items:center;gap:4px"><input type="checkbox" data-plugin-id="${esc(p.id)}" ${p.enabled ? "checked" : ""}> 启用</label>`;
+    item.querySelector("input").onchange = async (ev) => {
+      const on = ev.target.checked;
+      try {
+        await api(`/api/plugins/${encodeURIComponent(p.id)}/${on ? "enable" : "disable"}`, { method: "POST", body: {} });
+        toast(`${on ? "已启用" : "已禁用"}「${p.name}」，刷新页面生效`);
+      } catch (e) { ev.target.checked = !on; toast(e.message, true); }
+    };
+    box.appendChild(item);
+  }
+  $("pluginModalBg").style.display = "flex";
+}
+$("btnPlugins").onclick = openPluginModal;
+$("btnClosePlugins").onclick = () => { $("pluginModalBg").style.display = "none"; };
+
 /* ---------- 启动 ---------- */
 async function init() {
   // 桌面版：自动注入令牌，免弹窗
@@ -867,7 +955,7 @@ async function init() {
   await Promise.allSettled([loadCats(), loadList(), loadProjects(), loadHealth()]);
   setInterval(loadList, 3000);
   setInterval(loadHealth, 10000);
-  if (window.kbInit) kbInit();
+  await loadPlugins();
 }
 init();
 </script>
