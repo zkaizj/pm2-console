@@ -71,6 +71,26 @@ SPRING_PROFILES_ACTIVE=prod
 
 修改后重启：`pm2 restart pm2-console --update-env`
 
+## 🔑 修改访问令牌（上线前必做）
+
+默认令牌是 `admin`，等同本机管理员权限，**正式使用前必须改成强随机值**。完整流程（三步）：
+
+```powershell
+# 1. 持久化新令牌（写入用户环境变量，重启电脑后仍在）
+setx CONSOLE_TOKEN "你的强随机令牌"
+
+# 2. 新开一个终端，让 pm2 重新读取环境变量并重启
+pm2 restart pm2-console --update-env
+
+# 3. 保存进程列表（保证重启电脑 resurrect 恢复后令牌不变）
+pm2 save
+```
+
+> - 令牌在**启动时**从环境变量 `CONSOLE_TOKEN` 读取，改完必须重启（`--update-env` 让 pm2 注入新环境）
+> - 改完后浏览器首次访问会重新弹窗输入新令牌（旧令牌已失效）
+> - **令牌 = 电脑控制权**：中控台可执行任意命令，令牌泄露等于电脑失守，切勿外传
+> - **切勿把中控台端口映射/暴露到公网**；需要远程访问请走 VPN（如 Tailscale）或 Cloudflare Tunnel + Access
+
 ## 🔌 API 一览
 
 | 方法 | 路径 | 说明 |
