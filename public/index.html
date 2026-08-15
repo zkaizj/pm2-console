@@ -107,6 +107,23 @@
 </div>
 
 <div class="card">
+  <h2>🔍 检测本机正在运行的进程（非系统，可一键拉入托管）</h2>
+  <div class="row" style="margin-bottom:10px">
+    <input type="text" id="inDiscoverFilter" placeholder="按名称 / 路径过滤…">
+    <button id="btnScan">🔄 扫描</button>
+    <button id="btnClearDisc">清空</button>
+    <span class="muted" id="discoverInfo"></span>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>名称</th><th>可执行文件</th><th>命令行</th><th>PID</th><th>操作</th></tr></thead>
+      <tbody id="discTbody"><tr><td colspan="5" class="empty">点「扫描」检测本机正在运行的非系统进程（已托管的不显示）</td></tr></tbody>
+    </table>
+  </div>
+  <div class="hint">「拉入」= 读取该进程的启动命令，在 pm2 中重新托管（原进程不动）；「拉入并停原」= 托管后顺手停掉原进程（避免端口冲突）。已由 pm2 管理的进程不会出现在列表里。</div>
+</div>
+
+<div class="card">
   <h2>📋 托管中的服务 <span class="muted" id="countInfo"></span></h2>
   <div class="table-wrap">
     <table>
@@ -364,6 +381,50 @@ $("btnPresetDsh").onclick = async () => {
   try { const r = await api("/api/presets/dsh", { method: "POST" }); toast(r.message + "（" + (r.note || "") + "）"); setTimeout(loadList, 800); }
   catch (e) { toast(e.message, true); }
 };
+
+/* ---------- 进程发现与拉入 ---------- */
+let DISCOVER = [];
+async function scanDiscover() {
+  $("discoverInfo").textContent = "扫描中…";
+  try {
+    const d = await api("/api/discover");
+    DISCOVER = d.processes || [];
+    renderDiscover();
+    $("discoverInfo").textContent = `共 ${DISCOVER.length} 个可拉入进程`;
+  } catch (e) { $("discoverInfo").textContent = "扫描失败：" + e.message; toast(e.message, true); }
+}
+function renderDiscover() {
+  const kw = $("inDiscoverFilter").value.trim().toLowerCase();
+  const list = kw ? DISCOVER.filter((p) => (p.name + " " + p.exe + " " + p.cmdline).toLowerCase().includes(kw)) : DISCOVER;
+  if (!list.length) { $("discTbody").innerHTML = `<tr><td colspan="5" class="empty">${DISCOVER.length ? "没有匹配的进程" : "点「扫描」检测本机进程"}</td></tr>`; return; }
+  $("discTbody").innerHTML = list.map((p) => `
+    <tr>
+      <td><b>${esc(p.name)}</b></td>
+      <td class="mono muted" title="${esc(p.exe)}">${esc(shortPath(p.exe))}</td>
+      <td class="mono muted" title="${esc(p.cmdline)}">${esc(shortPath(p.cmdline))}</td>
+      <td class="mono">${p.pid}</td>
+      <td><div class="actions">
+        <button class="small" onclick="importProc(${p.pid}, false)">➕ 拉入</button>
+        <button class="small" onclick="importProc(${p.pid}, true)">➕ 拉入并停原</button>
+      </div></td>
+    </tr>`).join("");
+}
+async function importProc(pid, stopOriginal) {
+  const p = DISCOVER.find((x) => x.pid === pid);
+  if (!p) return toast("进程已不在列表，请重新扫描", true);
+  const suggested = p.name.replace(/\.exe$/i, "");
+  const name = prompt(`拉入为服务（名称，默认 ${suggested}）：`, suggested);
+  if (name === null) return;
+  const category = prompt("归入分类（留空为未分类）：", "") || "";
+  try {
+    const r = await api(`/api/discover/${pid}/import`, { method: "POST", body: { name: name.trim() || undefined, category, stopOriginal: !!stopOriginal } });
+    toast(r.message || "已拉入 " + name);
+    setTimeout(() => { scanDiscover(); loadList(); }, 1000);
+  } catch (e) { toast(e.message, true); }
+}
+$("btnScan").onclick = scanDiscover;
+$("btnClearDisc").onclick = () => { DISCOVER = []; $("inDiscoverFilter").value = ""; renderDiscover(); $("discoverInfo").textContent = ""; };
+$("inDiscoverFilter").oninput = renderDiscover;
 
 /* ---------- 启动 ---------- */
 async function init() {

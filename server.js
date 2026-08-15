@@ -313,6 +313,100 @@ app.post("/api/presets/dsh", (req, res) => {
   probe.setTimeout(3000, () => { probe.destroy(); res.status(500).json({ error: "端口探测超时" }); });
 });
 
+/* ---------- 进程发现与拉入 ---------- */
+const { execFile, spawnSync } = require("child_process");
+
+/** 用 PowerShell CIM 查询进程（windowsHide 避免弹窗；本服务被 pm2 隐藏运行时子进程必须隐藏） */
+function queryProcessesJson(pidFilter) {
+  return new Promise((resolve, reject) => {
+    const script = pidFilter
+      ? `Get-CimInstance Win32_Process -Filter "ProcessId=${pidFilter}" | Select-Object ProcessId,Name,ExecutablePath,CommandLine,SessionId | ConvertTo-Json -Compress`
+      : `Get-CimInstance Win32_Process | Select-Object ProcessId,Name,ExecutablePath,CommandLine,SessionId | ConvertTo-Json -Compress`;
+    execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+      windowsHide: true, timeout: 20000, maxBuffer: 64 * 1024 * 1024, env: Object.assign({}, process.env, { POWERSHELL_TELEMETRY_OPTOUT: "1" })
+    }, (err, stdout) => {
+      if (err) return reject(new Error("进程查询失败: " + (err.message || "未知错误")));
+      try {
+        const text = String(stdout || "").trim();
+        if (!text) return resolve([]);   // 无结果（进程已不存在）时 PowerShell 输出为空
+        const data = JSON.parse(text);
+        resolve(Array.isArray(data) ? data : (data ? [data] : []));
+      } catch (e) { reject(new Error("进程查询结果解析失败")); }
+    });
+  });
+}
+
+/** 系统/噪音进程：C:\Windows 路径、Session 0、无命令行、常见外壳进程 */
+const DISCOVER_EXCLUDE = new Set(["conhost.exe", "pwsh.exe", "powershell.exe", "cmd.exe", "openconsole.exe", "windowsterminal.exe", "wslhost.exe", "sihost.exe", "runtimebroker.exe", "taskhostw.exe", "applicationframehost.exe", "securityhealthsystray.exe", "explorer.exe"]);
+function isDiscoverable(p) {
+  if (!p || !p.ExecutablePath || !p.CommandLine) return false;
+  if (DISCOVER_EXCLUDE.has((p.Name || "").toLowerCase())) return false;
+  if (Number(p.SessionId) === 0) return false;                       // 服务会话
+  const exe = p.ExecutablePath.toLowerCase();
+  if (exe.startsWith("c:\\windows\\")) return false;                 // 系统目录
+  if (exe.startsWith("c:\\program files\\windowsapps")) return false; // 商店应用
+  return true;
+}
+
+// 扫描本机非系统进程（排除已由 pm2 管理的）
+app.get("/api/discover", (req, res) => {
+  withPm2(res, () => {
+    pm2.list((err, list) => {
+      if (err) return res.status(500).json({ error: err.message });
+      const managedPids = new Set((list || []).map((p) => p.pid).filter(Boolean));
+      queryProcessesJson().then((procs) => {
+        const out = procs.filter(isDiscoverable).filter((p) => !managedPids.has(Number(p.ProcessId)))
+          .map((p) => ({ pid: Number(p.ProcessId), name: p.Name, exe: p.ExecutablePath, cmdline: p.CommandLine, session: Number(p.SessionId) }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        res.json({ count: out.length, processes: out });
+      }).catch((e) => res.status(500).json({ error: e.message }));
+    });
+  });
+});
+
+/** 停止进程：先优雅（taskkill /T），轮询确认，仍存活则强制（/F），返回是否已停止 */
+function killProcess(pid) {
+  return new Promise((resolve) => {
+    spawnSync("taskkill", ["/PID", String(pid), "/T"], { windowsHide: true, stdio: "ignore" });
+    const check = (attempt) => {
+      queryProcessesJson(pid).then((procs) => {
+        if (procs.length === 0) return resolve(true);
+        if (attempt <= 0) return resolve(false);
+        if (attempt === 4) spawnSync("taskkill", ["/F", "/PID", String(pid), "/T"], { windowsHide: true, stdio: "ignore" });
+        setTimeout(() => check(attempt - 1), 700);
+      }).catch(() => resolve(false));
+    };
+    check(6); // 最多约 4.9s；第 4 次检查时补一发强杀
+  });
+}
+
+// 把检测到的进程"拉入" pm2 托管: { name?, category?, stopOriginal?, cwd? }
+app.post("/api/discover/:pid/import", async (req, res) => {
+  try {
+    const pid = Number(req.params.pid);
+    const { name, category, stopOriginal, cwd } = req.body || {};
+    const procs = await queryProcessesJson(pid);
+    const p = procs[0];
+    if (!p || !p.ExecutablePath || !p.CommandLine) return res.status(404).json({ error: `进程 ${pid} 不存在或无法读取启动命令` });
+    const exe = p.ExecutablePath;
+    const tokens = tokenizeCommand(p.CommandLine);
+    const args = tokens.length > 1 ? tokens.slice(1) : [];
+    const appName = (name && String(name).trim()) || path.basename(exe).replace(/\.exe$/i, "");
+    const stopped = stopOriginal ? await killProcess(pid) : false;
+    if (category && String(category).trim()) state.serviceCategory[appName] = String(category).trim();
+    saveState();
+    pm2.start({
+      name: appName, script: exe, args, cwd: (cwd && String(cwd).trim()) || path.dirname(exe),
+      interpreter: "none", autorestart: true, max_restarts: 20, min_uptime: "2s", kill_timeout: 5000, windowsHide: true
+    }, (err) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ ok: true, message: `已拉入 ${appName}（原进程${stopped ? "已停止" : "仍在运行，请注意端口冲突"}）`, name: appName, originalStopped: stopped });
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 /* ---------- 启动 ---------- */
 app.listen(PORT, HOST, () => {
   console.log(`[pm2-console] 中控台已启动: http://${HOST}:${PORT}`);

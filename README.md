@@ -17,6 +17,8 @@
 - **实时监控**：列表 3 秒自动刷新（状态 / CPU / 内存 / 重启次数 / 运行时长 / 启动时间）；
   每个进程有监控面板：近 90 秒 **CPU / 内存趋势曲线** + **实时日志尾部**
 - **一键掌控**：启动 / 停止 / 重启 / 删除，全部网页上完成
+- **进程发现与拉入**：扫描本机正在运行的非系统进程，一键把任意程序"拉入" pm2 托管
+  （自动读取启动命令重建托管，可选"拉入并停原进程"避免端口冲突）
 - **DSH 预设**：一键拉入 `dsh-web`（DeepSeek Harness Web）
 - **自举托管**：中控台本身也由 PM2 管理，`pm2 save` 后随 PM2 生命周期恢复
 
@@ -83,6 +85,8 @@ SPRING_PROFILES_ACTIVE=prod
 | POST | `/api/processes/:id/action` | `{action: start\|stop\|restart\|delete}` |
 | POST | `/api/processes/:id/category` | 修改服务分类 `{category}` |
 | GET | `/api/processes/:id/logs?lines=200` | 日志尾部 |
+| GET | `/api/discover` | 扫描本机非系统进程（排除已托管） |
+| POST | `/api/discover/:pid/import` | 拉入进程 `{name?, category?, stopOriginal?, cwd?}` |
 | POST | `/api/presets/dsh` | 一键拉入 DSH Web |
 
 所有 `/api` 请求需携带请求头：`X-Console-Token: <你的令牌>`
