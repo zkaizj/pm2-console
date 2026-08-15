@@ -29,13 +29,14 @@ const STATE_FILE = path.join(STATE_DIR, "state.json");
 const DEFAULT_CATEGORIES = ["AI 工具", "Web 服务", "Java 应用", "数据库", "工具"];
 
 /* ---------- 分类状态（持久化） ---------- */
-let state = { categories: [...DEFAULT_CATEGORIES], serviceCategory: {}, serviceMeta: {} };
+let state = { categories: [...DEFAULT_CATEGORIES], serviceCategory: {}, serviceMeta: {}, settings: { webhookUrl: "", webhookType: "generic", alertEnabled: false, alertCooldownMin: 5 } };
 function loadState() {
   try {
     const raw = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
     state.categories = Array.isArray(raw.categories) ? raw.categories : [...DEFAULT_CATEGORIES];
     state.serviceCategory = raw.serviceCategory && typeof raw.serviceCategory === "object" ? raw.serviceCategory : {};
     state.serviceMeta = raw.serviceMeta && typeof raw.serviceMeta === "object" ? raw.serviceMeta : {};
+    state.settings = Object.assign({ webhookUrl: "", webhookType: "generic", alertEnabled: false, alertCooldownMin: 5 }, raw.settings || {});
   } catch { /* 首次运行或文件损坏，用默认 */ }
 }
 function saveState() {
@@ -92,7 +93,9 @@ function mapProcess(p) {
     createdAt: env.created_at || null,
     category: state.serviceCategory[p.name] || "未分类",
     webUrl: (state.serviceMeta[p.name] || {}).webUrl || null,
-    remark: (state.serviceMeta[p.name] || {}).remark || null
+    remark: (state.serviceMeta[p.name] || {}).remark || null,
+    healthUrl: (state.serviceMeta[p.name] || {}).healthUrl || null,
+    healthKeyword: (state.serviceMeta[p.name] || {}).healthKeyword || null
   };
 }
 
@@ -263,9 +266,9 @@ app.post("/api/processes/:id/action", (req, res) => {
   });
 });
 
-// 修改服务的备注与前端页面地址
+// 修改服务的备注与前端页面地址（含健康检查配置）
 app.post("/api/processes/:id/meta", (req, res) => {
-  const { webUrl, remark } = req.body || {};
+  const { webUrl, remark, healthUrl, healthKeyword } = req.body || {};
   withPm2(res, () => {
     pm2.describe(Number(req.params.id), (err, data) => {
       if (err) return res.status(500).json({ error: err.message });
@@ -273,12 +276,134 @@ app.post("/api/processes/:id/meta", (req, res) => {
       if (!proc) return res.status(404).json({ error: "进程不存在" });
       state.serviceMeta[proc.name] = {
         webUrl: String(webUrl || "").trim() || null,
-        remark: String(remark || "").trim() || null
+        remark: String(remark || "").trim() || null,
+        healthUrl: String(healthUrl || "").trim() || null,
+        healthKeyword: String(healthKeyword || "").trim() || null
       };
       saveState();
       res.json({ ok: true, name: proc.name, meta: state.serviceMeta[proc.name] });
     });
   });
+});
+
+/* ---------- 健康检查 / 告警 / 设置 ---------- */
+const { performance } = require("perf_hooks");
+let healthCache = {};        // name -> { ok, latencyMs, status, checkedAt }
+let prevPm2Status = {};      // name -> 上次 pm2 状态
+let alertLastAt = {};        // key -> 上次告警时间戳
+
+function sendAlert(text) {
+  const { webhookUrl, webhookType } = state.settings;
+  if (!state.settings.alertEnabled || !webhookUrl) return;
+  let payload = { msgtype: "text", text: { content: text } };           // 企业微信 / 钉钉 / 通用
+  if (webhookType === "feishu") payload = { msg_type: "text", content: { text } };
+  fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(6000) })
+    .catch((e) => console.error("[pm2-console] 告警发送失败:", e.message));
+}
+function alertThrottled(key) {
+  const now = Date.now();
+  const cooldown = Math.max(1, Number(state.settings.alertCooldownMin) || 5) * 60 * 1000;
+  if (alertLastAt[key] && now - alertLastAt[key] < cooldown) return false;
+  alertLastAt[key] = now;
+  return true;
+}
+function probeUrl(url) {
+  const t0 = performance.now();
+  return fetch(url, { signal: AbortSignal.timeout(6000), redirect: "follow" })
+    .then((r) => r.text().catch(() => "").then((body) => ({ ok: r.ok, status: r.status, latencyMs: Math.round(performance.now() - t0), body })))
+    .catch((e) => ({ ok: false, status: 0, latencyMs: Math.round(performance.now() - t0), err: String(e.message || e) }));
+}
+/** 周期健康巡检：更新 healthCache，pm2 状态异常 & 健康失败时告警 */
+async function healthSweep() {
+  if (!pm2Connected) return;
+  pm2.list((err, list) => {
+    if (err) return;
+    const procs = list || [];
+    // pm2 状态异常告警
+    procs.forEach((p) => {
+      const name = p.name;
+      const st = p.pm2_env ? p.pm2_env.status : p.status;
+      const prev = prevPm2Status[name];
+      if (prev === "online" && st === "errored" && alertThrottled("pm2:" + name)) sendAlert(`⚠️ PM2 服务异常：${name} 从运行中变为异常状态`);
+      prevPm2Status[name] = st;
+    });
+    // 健康检查
+    procs.forEach((p) => {
+      const name = p.name;
+      const meta = state.serviceMeta[name] || {};
+      if (!meta.healthUrl) return;
+      probeUrl(meta.healthUrl).then((r) => {
+        const ok = r.ok && (!meta.healthKeyword || (r.body || "").includes(meta.healthKeyword));
+        healthCache[name] = { ok, latencyMs: r.latencyMs, status: r.status, checkedAt: new Date().toISOString() };
+        const prev = healthCache[name];
+        const wasOk = prev === undefined ? true : prev.ok;
+        if (!ok && wasOk && alertThrottled("health:" + name)) sendAlert(`🚨 健康检查失败：${name}（${meta.healthUrl}）`);
+      });
+    });
+  });
+}
+setInterval(healthSweep, 20000);
+setTimeout(healthSweep, 3000);
+
+app.get("/api/settings", (req, res) => res.json({ settings: state.settings }));
+app.post("/api/settings", (req, res) => {
+  const b = req.body || {};
+  ["webhookUrl", "webhookType", "alertEnabled", "alertCooldownMin"].forEach((k) => { if (b[k] !== undefined) state.settings[k] = b[k]; });
+  state.settings.webhookUrl = String(state.settings.webhookUrl || "").trim();
+  state.settings.alertEnabled = !!state.settings.alertEnabled;
+  saveState();
+  res.json({ ok: true, settings: state.settings });
+});
+app.get("/api/health", (req, res) => {
+  withPm2(res, () => {
+    pm2.list((err, list) => {
+      if (err) return res.status(500).json({ error: err.message });
+      const services = (list || []).map((p) => ({
+        name: p.name,
+        status: p.pm2_env ? p.pm2_env.status : p.status,
+        webUrl: (state.serviceMeta[p.name] || {}).webUrl || null,
+        health: healthCache[p.name] || null,
+        hasHealth: !!(state.serviceMeta[p.name] || {}).healthUrl
+      }));
+      const summary = { total: services.length, online: services.filter((s) => s.status === "online").length, unhealthy: services.filter((s) => s.hasHealth && s.health && !s.health.ok).length };
+      res.json({ summary, services });
+    });
+  });
+});
+
+/* ---------- 日志搜索 ---------- */
+function tailRead(file, maxBytes) {
+  try {
+    const fd = fs.openSync(file, "r");
+    const size = fs.fstatSync(fd).size;
+    const start = Math.max(0, size - maxBytes);
+    const buf = Buffer.alloc(size - start);
+    fs.readSync(fd, buf, 0, buf.length, start);
+    fs.closeSync(fd);
+    return buf.toString("utf8");
+  } catch { return ""; }
+}
+app.get("/api/logs/search", (req, res) => {
+  const q = String(req.query.q || "").trim();
+  const svc = String(req.query.service || "").trim();
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
+  if (!q) return res.json({ matches: [] });
+  let re;
+  try { re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"); }
+  catch (e) { return res.status(400).json({ error: "无效的关键字" }); }
+  const dir = path.join(PM2_HOME, "logs");
+  if (!fs.existsSync(dir)) return res.json({ matches: [] });
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith(".log") && (!svc || f.startsWith(svc)));
+  const matches = [];
+  for (const f of files) {
+    const text = tailRead(path.join(dir, f), 1024 * 1024);   // 每文件搜最近 1MB
+    const lines = text.split(/\r?\n/);
+    lines.forEach((line, i) => {
+      if (re.test(line)) matches.push({ file: f, line: i + 1, text: line });
+    });
+    if (matches.length >= limit) break;
+  }
+  res.json({ matches: matches.slice(0, limit), total: matches.length });
 });
 
 // 修改服务的分类
@@ -546,6 +671,38 @@ async function runPipeline(project, kind) {
       s.output = r.ok ? `已重启 ${project.restartService}` : "重启失败: " + r.msg;
       if (!r.ok) return finish("fail", "重启服务"), dep;
     }
+    // 部署后探活 + 自动回滚
+    if (project.healthUrl) {
+      const s = { name: "部署后健康检查", state: "running", output: "" };
+      dep.steps.push(s);
+      const timeoutMs = Number(project.healthTimeoutMs) || 30000;
+      const deadline = Date.now() + timeoutMs;
+      let ok = false;
+      while (Date.now() < deadline) {
+        const r = await probeUrl(project.healthUrl);
+        ok = r.ok && (!project.healthKeyword || (r.body || "").includes(project.healthKeyword));
+        s.output += `[${new Date().toLocaleTimeString()}] ${project.healthUrl} -> ${r.ok ? r.status : "连接失败"}\n`;
+        if (ok) break;
+        await new Promise((res) => setTimeout(res, 2000));
+      }
+      if (ok) { s.state = "done"; s.output += "✅ 健康检查通过\n"; }
+      else {
+        s.state = "fail";
+        s.output += "❌ 健康检查未通过，自动回滚到上次成功版本...\n";
+        dep.autoRolledBack = true;
+        if (project.lastGoodCommit) {
+          await runCommandInto("自动回滚: git reset", `git -C "${repo}" reset --hard ${project.lastGoodCommit}`, repo, dep.steps);
+          if (project.installCmd) await runCommandInto("自动回滚: 安装依赖", project.installCmd, repo, dep.steps);
+          if (project.buildCmd) await runCommandInto("自动回滚: 构建", project.buildCmd, repo, dep.steps);
+          if (project.restartService) {
+            const r2 = await restartService(project.restartService);
+            dep.steps.push({ name: "自动回滚: 重启服务", state: r2.ok ? "done" : "fail", output: r2.ok ? "已重启" : r2.msg });
+          }
+          dep.steps.push({ name: "自动回滚完成", state: "done", output: `已回滚到 ${project.lastGoodCommit.slice(0, 8)}` });
+        }
+        return finish("fail", "部署后健康检查"), dep;
+      }
+    }
     finish("ok", null);
     if (kind === "deploy" && dep.commit) project.lastGoodCommit = dep.commit;
     project.deployHistory = project.deployHistory || [];
@@ -579,7 +736,9 @@ app.post("/api/projects", (req, res) => {
     name: String(b.name).trim(), gitUrl: String(b.gitUrl || "").trim(), repoDir: String(b.repoDir).trim(),
     framework: String(b.framework || "node").trim(), installCmd: String(b.installCmd || "").trim(),
     buildCmd: String(b.buildCmd || "").trim(), restartService: String(b.restartService || "").trim(),
-    description: String(b.description || "").trim(), createdAt: new Date().toISOString(), lastGoodCommit: null, deployHistory: []
+    description: String(b.description || "").trim(), createdAt: new Date().toISOString(), lastGoodCommit: null, deployHistory: [],
+    healthUrl: String(b.healthUrl || "").trim() || null, healthKeyword: String(b.healthKeyword || "").trim() || null,
+    healthTimeoutMs: Number(b.healthTimeoutMs) || 30000
   };
   projects.push(proj); saveProjects();
   res.json({ ok: true, project: proj });
@@ -588,7 +747,8 @@ app.patch("/api/projects/:id", (req, res) => {
   const p = projects.find((x) => x.id === req.params.id);
   if (!p) return res.status(404).json({ error: "项目不存在" });
   const b = req.body || {};
-  ["name", "gitUrl", "repoDir", "framework", "installCmd", "buildCmd", "restartService", "description"].forEach((k) => { if (b[k] !== undefined) p[k] = String(b[k]).trim(); });
+  ["name", "gitUrl", "repoDir", "framework", "installCmd", "buildCmd", "restartService", "description", "healthUrl", "healthKeyword"].forEach((k) => { if (b[k] !== undefined) p[k] = String(b[k]).trim(); });
+  if (b.healthTimeoutMs !== undefined) p.healthTimeoutMs = Number(b.healthTimeoutMs) || 30000;
   saveProjects();
   res.json({ ok: true, project: p });
 });

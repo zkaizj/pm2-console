@@ -91,9 +91,14 @@
 </head>
 <body>
 <h1><span class="dot" id="dshDot"></span>PM2 中控台 <span class="muted" style="font-size:13px" id="connInfo"></span></h1>
-<div class="sub" id="subInfo">正在连接… <button class="small" id="btnModules" style="margin-left:10px">🧩 模块显示</button></div>
+<div class="sub" id="subInfo">正在连接… <button class="small" id="btnModules" style="margin-left:10px">🧩 模块显示</button><button class="small" id="btnAlerts" style="margin-left:6px">🔔 告警设置</button></div>
 
 <div class="chips" id="chips"></div>
+
+<div class="card" id="card-overview" data-module="1">
+  <h2><span class="dnd-handle" title="拖动排序">⋮⋮</span>🏥 服务总览 <span class="muted" id="ovInfo"></span></h2>
+  <div id="ovBody"><div class="empty">加载中…</div></div>
+</div>
 
 <div class="card" id="card-pullin" data-module="1">
   <h2><span class="dnd-handle" title="拖动排序">⋮⋮</span>➕ 拉入新程序（填一条启动命令即可接管）</h2>
@@ -150,13 +155,22 @@
 </div>
 
 <div class="card" id="card-services" data-module="1">
-  <h2><span class="dnd-handle" title="拖动排序">⋮⋮</span>📋 托管中的服务 <span class="muted" id="countInfo"></span></h2>
-  <div class="table-wrap">
+  <h2><span class="dnd-handle" title="拖动排序">⋮⋮</span>📋 托管中的服务 <span class="muted" id="countInfo"></span></h2>  <div class="table-wrap">
     <table>
       <thead><tr><th>名称</th><th>分类</th><th>状态</th><th>重启</th><th>运行时长</th><th>CPU</th><th>内存</th><th>启动时间</th><th>操作</th><th>日志</th><th>监控</th><th>页面</th></tr></thead>
       <tbody id="tbody"><tr><td colspan="12" class="empty">加载中…</td></tr></tbody>
     </table>
   </div>
+</div>
+
+<div class="card" id="card-logsearch" data-module="1">
+  <h2><span class="dnd-handle" title="拖动排序">⋮⋮</span>🔎 日志搜索</h2>
+  <div class="row" style="margin-bottom:8px">
+    <input type="text" id="lsQ" placeholder="关键字（如 ERROR / Exception / 500）">
+    <select id="lsService" style="flex:0 0 170px"><option value="">全部服务</option></select>
+    <button class="primary" id="btnLsSearch">🔍 搜索</button>
+  </div>
+  <pre id="lsResult" style="max-height:280px;overflow:auto;white-space:pre-wrap;word-break:break-all;font-size:12px;background:#0a0e18;border:1px solid var(--border);border-radius:6px;padding:10px;color:#c8d3ea">输入关键字开始搜索（每文件最近 1MB 内）</pre>
 </div>
 
 <div class="card" id="logPanel">
@@ -205,6 +219,9 @@
     <input type="text" id="pjInstallCmd" placeholder="安装依赖命令（如 npm install --no-audit）">
     <input type="text" id="pjBuildCmd" placeholder="构建命令（可选，如 npm run build / mvn package）">
     <input type="text" id="pjRestartService" placeholder="关联的服务名（pm2 里托管的名称，部署后自动重启；可留空）">
+    <input type="text" id="pjHealthUrl" placeholder="部署后健康检查地址（可选，如 http://127.0.0.1:8080/health）">
+    <input type="text" id="pjHealthKeyword" placeholder="健康关键字（可选，响应须包含）">
+    <input type="text" id="pjHealthTimeout" placeholder="健康检查超时（秒，默认 30）">
     <input type="text" id="pjDesc" placeholder="描述（可选）">
     <div class="row"><button class="primary small" id="btnSaveProject">保存</button><button class="small" id="btnCloseProj">关闭</button></div>
   </div>
@@ -219,12 +236,26 @@
   </div>
 </div>
 
+<div class="modal-bg" id="alertModalBg">
+  <div class="modal">
+    <h3>🔔 告警设置</h3>
+    <input type="text" id="alWebhook" placeholder="Webhook 地址（企业微信/钉钉/飞书机器人 URL）">
+    <select id="alType"><option value="generic">企业微信 / 钉钉</option><option value="feishu">飞书</option></select>
+    <div class="row" style="margin-bottom:8px"><label style="margin:0">启用告警</label><input type="checkbox" id="alEnabled" style="width:auto;flex:0 0 auto"></div>
+    <input type="text" id="alCooldown" placeholder="冷却时间（分钟，默认 5，防刷屏）">
+    <div class="hint">触发条件：① 服务状态异常（运行中 → 异常）② 健康检查失败（需在服务 ⚙️ 里配置健康检查地址）。</div>
+    <div class="row" style="margin-top:10px"><button class="primary small" id="btnSaveAlerts">保存</button><button class="small" id="btnCloseAlerts">关闭</button></div>
+  </div>
+</div>
+
 <div class="modal-bg" id="metaModalBg">
   <div class="modal">
     <h3>⚙️ 服务备注与前端页面</h3>
     <div class="muted" style="font-size:12px;margin-bottom:8px" id="metaTitle"></div>
     <input type="text" id="metaUrl" placeholder="前端页面地址（如 http://127.0.0.1:8080；留空则不显示「打开」按钮）">
     <input type="text" id="metaRemark" placeholder="备注（如：管理后台 / 端口 8080）">
+    <input type="text" id="metaHealth" placeholder="健康检查地址（如 http://127.0.0.1:8080/health，总览与告警用）">
+    <input type="text" id="metaHealthKw" placeholder="健康关键字（可选，响应须包含，如 ok）">
     <div class="row"><button class="primary small" id="btnSaveMeta">保存</button><button class="small" id="btnCloseMeta">关闭</button></div>
   </div>
 </div>
@@ -374,8 +405,15 @@ async function loadList() {
       </tr>`).join("");
   } catch (e) {
     $("dshDot").className = "dot"; $("connInfo").textContent = "· 连接失败";
-    $("tbody").innerHTML = `<tr><td colspan="11" class="empty">${esc(e.message)}</td></tr>`;
+    $("tbody").innerHTML = `<tr><td colspan="12" class="empty">${esc(e.message)}</td></tr>`;
   }
+  fillLsService();
+}
+function fillLsService() {
+  const sel = $("lsService"), cur = sel.value;
+  const names = [...new Set(ALL.map((p) => p.name))].sort();
+  sel.innerHTML = '<option value="">全部服务</option>' + names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+  sel.value = cur;
 }
 async function setCat(id, cat) {
   if (cat === "__new__") return;
@@ -544,7 +582,7 @@ function renderProjects() {
 }
 $("btnNewProject").onclick = () => {
   editingProj = null; $("projModalTitle").textContent = "新建项目";
-  ["pjName", "pjGitUrl", "pjRepoDir", "pjInstallCmd", "pjBuildCmd", "pjRestartService", "pjDesc"].forEach((i) => $(i).value = "");
+  ["pjName", "pjGitUrl", "pjRepoDir", "pjInstallCmd", "pjBuildCmd", "pjRestartService", "pjDesc", "pjHealthUrl", "pjHealthKeyword", "pjHealthTimeout"].forEach((i) => $(i).value = "");
   $("pjFramework").value = "node";
   $("projModalBg").style.display = "flex";
 };
@@ -555,13 +593,17 @@ function editProject(id) {
   $("pjFramework").value = p.framework || "node"; $("pjInstallCmd").value = p.installCmd || "";
   $("pjBuildCmd").value = p.buildCmd || ""; $("pjRestartService").value = p.restartService || "";
   $("pjDesc").value = p.description || "";
+  $("pjHealthUrl").value = p.healthUrl || ""; $("pjHealthKeyword").value = p.healthKeyword || "";
+  $("pjHealthTimeout").value = p.healthTimeoutMs ? Math.round(p.healthTimeoutMs / 1000) : 30;
   $("projModalBg").style.display = "flex";
 }
 $("btnSaveProject").onclick = async () => {
   const body = {
     name: $("pjName").value.trim(), gitUrl: $("pjGitUrl").value.trim(), repoDir: $("pjRepoDir").value.trim(),
     framework: $("pjFramework").value, installCmd: $("pjInstallCmd").value.trim(), buildCmd: $("pjBuildCmd").value.trim(),
-    restartService: $("pjRestartService").value.trim(), description: $("pjDesc").value.trim()
+    restartService: $("pjRestartService").value.trim(), description: $("pjDesc").value.trim(),
+    healthUrl: $("pjHealthUrl").value.trim(), healthKeyword: $("pjHealthKeyword").value.trim(),
+    healthTimeoutMs: (Number($("pjHealthTimeout").value) || 30) * 1000
   };
   if (!body.name || !body.repoDir) return toast("项目名称和目录必填", true);
   try {
@@ -614,10 +656,12 @@ $("btnCloseDep").onclick = () => { $("depModalBg").style.display = "none"; clear
 /* ---------- 模块排序与显示 ---------- */
 const LAYOUT_KEY = "pm2-console.layout", HIDDEN_KEY = "pm2-console.hidden";
 const MODULES = [
+  { id: "card-overview", name: "🏥 服务总览" },
   { id: "card-pullin", name: "➕ 拉入新程序" },
   { id: "card-discover", name: "🔍 进程扫描" },
   { id: "card-projects", name: "📦 项目管理" },
-  { id: "card-services", name: "📋 托管服务" }
+  { id: "card-services", name: "📋 托管服务" },
+  { id: "card-logsearch", name: "🔎 日志搜索" }
 ];
 function moduleOrder() { return Array.from(document.querySelectorAll(".card[data-module]")).map((c) => c.id); }
 function saveLayout() { localStorage.setItem(LAYOUT_KEY, JSON.stringify(moduleOrder())); }
@@ -689,18 +733,88 @@ function editMeta(name, id) {
   const p = ALL.find((x) => x.id === id);
   $("metaUrl").value = (p && p.webUrl) || "";
   $("metaRemark").value = (p && p.remark) || "";
+  $("metaHealth").value = (p && p.healthUrl) || "";
+  $("metaHealthKw").value = (p && p.healthKeyword) || "";
   $("metaModalBg").style.display = "flex";
 }
 $("btnSaveMeta").onclick = async () => {
   if (!metaProc) return;
   try {
-    await api(`/api/processes/${metaProc.id}/meta`, { method: "POST", body: { webUrl: $("metaUrl").value.trim(), remark: $("metaRemark").value.trim() } });
+    await api(`/api/processes/${metaProc.id}/meta`, { method: "POST", body: {
+      webUrl: $("metaUrl").value.trim(), remark: $("metaRemark").value.trim(),
+      healthUrl: $("metaHealth").value.trim(), healthKeyword: $("metaHealthKw").value.trim()
+    } });
     $("metaModalBg").style.display = "none";
-    await loadList();
+    await loadList(); await loadHealth();
     toast("已保存");
   } catch (e) { toast(e.message, true); }
 };
 $("btnCloseMeta").onclick = () => { $("metaModalBg").style.display = "none"; };
+
+/* ---------- 服务总览（健康检查） ---------- */
+let HEALTH = null;
+async function loadHealth() {
+  try {
+    const d = await api("/api/health");
+    HEALTH = d;
+    const s = d.summary;
+    $("ovInfo").textContent = `共 ${s.total} · 在线 ${s.online} · 健康异常 ${s.unhealthy}`;
+    if (!d.services.length) { $("ovBody").innerHTML = '<div class="empty">暂无服务</div>'; return; }
+    $("ovBody").innerHTML = `<table><thead><tr><th>服务</th><th>PM2 状态</th><th>健康检查</th><th>延迟</th><th>页面</th></tr></thead><tbody>`
+      + d.services.map((x) => {
+          const h = x.health;
+          const hc = x.hasHealth
+            ? (h ? `<span class="status ${h.ok ? "st-online" : "st-errored"}"><i></i>${h.ok ? "正常" : "异常"}</span>` : '<span class="muted">检测中…</span>')
+            : '<span class="muted">未配置</span>';
+          const lat = x.hasHealth && h ? `${h.latencyMs}ms` : "-";
+          return `<tr>
+            <td><b>${esc(x.name)}</b></td>
+            <td><span class="status ${SCLASS[x.status] || "st-unknown"}"><i></i>${SZH[x.status] || x.status}</span></td>
+            <td>${hc}</td><td class="mono muted">${lat}</td>
+            <td>${x.webUrl ? `<button class="small" onclick="openUrl('${esc(x.webUrl)}')">🌐</button>` : "-"}</td>
+          </tr>`;
+        }).join("") + "</tbody></table>";
+  } catch (e) { $("ovInfo").textContent = "总览加载失败"; }
+}
+
+/* ---------- 日志搜索 ---------- */
+async function doLogSearch() {
+  const q = $("lsQ").value.trim();
+  if (!q) { $("lsResult").textContent = "输入关键字开始搜索（每文件最近 1MB 内）"; return; }
+  const svc = $("lsService").value;
+  $("lsResult").textContent = "搜索中…";
+  try {
+    const d = await api(`/api/logs/search?q=${encodeURIComponent(q)}&service=${encodeURIComponent(svc)}`);
+    if (!d.matches.length) { $("lsResult").textContent = `未找到匹配（${svc || "全部服务"}）`; return; }
+    $("lsResult").textContent = d.matches.map((m) => `${m.file}:${m.line}  ${m.text}`).join("\n");
+  } catch (e) { $("lsResult").textContent = "搜索失败：" + e.message; }
+}
+$("btnLsSearch").onclick = doLogSearch;
+$("lsQ").onkeydown = (e) => { if (e.key === "Enter") doLogSearch(); };
+
+/* ---------- 告警设置 ---------- */
+async function loadSettingsUI() {
+  try {
+    const d = await api("/api/settings");
+    const s = d.settings;
+    $("alWebhook").value = s.webhookUrl || "";
+    $("alType").value = s.webhookType || "generic";
+    $("alEnabled").checked = !!s.alertEnabled;
+    $("alCooldown").value = s.alertCooldownMin || 5;
+  } catch (e) { /* 静默 */ }
+}
+$("btnAlerts").onclick = async () => { await loadSettingsUI(); $("alertModalBg").style.display = "flex"; };
+$("btnCloseAlerts").onclick = () => { $("alertModalBg").style.display = "none"; };
+$("btnSaveAlerts").onclick = async () => {
+  try {
+    await api("/api/settings", { method: "POST", body: {
+      webhookUrl: $("alWebhook").value.trim(), webhookType: $("alType").value,
+      alertEnabled: $("alEnabled").checked, alertCooldownMin: Number($("alCooldown").value) || 5
+    } });
+    $("alertModalBg").style.display = "none";
+    toast("告警设置已保存");
+  } catch (e) { toast(e.message, true); }
+};
 
 /* ---------- 启动 ---------- */
 async function init() {
@@ -713,7 +827,9 @@ async function init() {
   await loadCats();
   await loadList();
   await loadProjects();
+  await loadHealth();
   setInterval(loadList, 3000);
+  setInterval(loadHealth, 10000);
 }
 init();
 </script>
