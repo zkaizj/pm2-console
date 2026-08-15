@@ -1,4 +1,4 @@
-# 修复 dsh 在 Windows 上执行命令时弹控制台窗口的问题
+﻿# 修复 dsh 在 Windows 上执行命令时弹控制台窗口的问题
 # 原理：dsh-subprocess-local 的 spawn 没设 windowsHide，导致每个子进程闪一个黑窗口。
 # dsh 升级或 npx 缓存重建后补丁会丢失，运行本脚本即可重新打上（幂等）。
 $ErrorActionPreference = 'Stop'
