@@ -365,6 +365,7 @@ app.get("/api/health", (req, res) => {
       const services = (list || []).map((p) => ({
         name: p.name,
         status: p.pm2_env ? p.pm2_env.status : p.status,
+        category: state.serviceCategory[p.name] || "未分类",
         webUrl: (state.serviceMeta[p.name] || {}).webUrl || null,
         health: state.settings.healthCheckEnabled ? (healthCache[p.name] || null) : null,
         hasHealth: !!(state.serviceMeta[p.name] || {}).healthUrl

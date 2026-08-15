@@ -689,6 +689,9 @@ function showModule(cardsStr) {
   const ids = cardsStr.split(",");
   document.querySelectorAll(".card[data-module]").forEach((c) => c.classList.toggle("active", ids.includes(c.id)));
   document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.cards === cardsStr));
+  // 分类栏只在「总览 / 服务」页显示
+  const chips = $("chips");
+  if (chips) chips.style.display = (ids.includes("card-overview") || ids.includes("card-services")) ? "" : "none";
   localStorage.setItem(NAV_KEY, cardsStr);
 }
 document.querySelectorAll(".nav-item").forEach((b) => { b.onclick = () => showModule(b.dataset.cards); });
@@ -726,16 +729,23 @@ async function loadHealth() {
   try {
     const d = await api("/api/health");
     HEALTH = d;
-    const s = d.summary;
+    const all = d.services || [];
+    // 总览同样受分类过滤影响（与服务页一致）
+    const services = FILTER === "全部" ? all : all.filter((s) => (s.category || "未分类") === FILTER);
+    const s = {
+      total: services.length,
+      online: services.filter((x) => x.status === "online").length,
+      unhealthy: services.filter((x) => x.hasHealth && x.health && !x.health.ok).length
+    };
     if (d.enabled === false) {
       $("ovInfo").textContent = "健康检查已关闭";
-      $("ovBody").innerHTML = `<div class="empty">健康检查已关闭 —— 需要时点右上角「🔔 告警设置」勾选「启用健康巡检」。</div>`;
+      $("ovBody").innerHTML = `<div class="empty">健康检查已关闭 —— 需要时点侧边栏「🔔 告警设置」勾选「启用健康巡检」。</div>`;
       return;
     }
     $("ovInfo").textContent = `共 ${s.total} · 在线 ${s.online} · 健康异常 ${s.unhealthy}`;
-    if (!d.services.length) { $("ovBody").innerHTML = '<div class="empty">暂无服务</div>'; return; }
+    if (!services.length) { $("ovBody").innerHTML = '<div class="empty">该分类下暂无服务</div>'; return; }
     $("ovBody").innerHTML = `<table><thead><tr><th>服务</th><th>PM2 状态</th><th>健康检查</th><th>延迟</th><th>页面</th></tr></thead><tbody>`
-      + d.services.map((x) => {
+      + services.map((x) => {
           const h = x.health;
           const hc = x.hasHealth
             ? (h ? `<span class="status ${h.ok ? "st-online" : "st-errored"}"><i></i>${h.ok ? "正常" : "异常"}</span>` : '<span class="muted">检测中…</span>')
