@@ -12,7 +12,18 @@
     --green:#34d399; --red:#f87171; --yellow:#fbbf24; --gray:#64748b;
   }
   *{box-sizing:border-box;margin:0;padding:0}
-  body{background:var(--bg);color:var(--text);font:14px/1.6 "Microsoft YaHei",system-ui,sans-serif;padding:20px}
+  body{background:var(--bg);color:var(--text);font:14px/1.6 "Microsoft YaHei",system-ui,sans-serif}
+  .layout{display:flex;min-height:100vh}
+  .sidebar{width:200px;flex:0 0 200px;background:var(--panel);border-right:1px solid var(--border);padding:14px 10px;position:sticky;top:0;height:100vh;overflow:auto;display:flex;flex-direction:column}
+  .brand{font-size:16px;font-weight:600;padding:6px 10px 14px;border-bottom:1px solid var(--border);margin-bottom:10px}
+  .nav{display:flex;flex-direction:column;gap:4px;flex:1}
+  .nav-item{background:transparent;border:1px solid transparent;color:var(--muted);text-align:left;padding:9px 12px;border-radius:8px;cursor:pointer;font-size:13px;transition:.15s}
+  .nav-item:hover{color:var(--text);background:var(--panel2)}
+  .nav-item.active{background:var(--accent);border-color:var(--accent);color:#fff}
+  .side-foot{padding-top:10px;border-top:1px solid var(--border)}
+  .main{flex:1;padding:20px;max-width:1500px;min-width:0}
+  .card{display:none;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px}
+  .card.active{display:block}
   h1{font-size:20px;display:flex;align-items:center;gap:10px}
   h1 .dot{width:10px;height:10px;border-radius:50%;background:var(--gray)}
   h1 .dot.on{background:var(--green);box-shadow:0 0 8px var(--green)}
@@ -50,8 +61,6 @@
   .chip:hover{border-color:var(--accent)}
   .chip.active{background:var(--accent);border-color:var(--accent);color:#fff}
   .chip .n{opacity:.75;font-size:11px;margin-left:4px}
-  #logPanel,#monPanel{display:none}
-  #logPanel pre,#monPanel .mon-box{background:#0a0e18;border:1px solid var(--border);border-radius:6px;padding:10px;max-height:320px;overflow:auto;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-all;color:#c8d3ea}
   .log-head,.mon-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
   .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--accent);color:var(--text);padding:10px 18px;border-radius:8px;display:none;z-index:99;box-shadow:0 4px 20px rgba(0,0,0,.4)}
   .toast.err{border-color:var(--red)}
@@ -83,25 +92,33 @@
   .dnd-handle{cursor:grab;color:var(--muted);margin-right:6px;user-select:none;font-size:13px}
   .dnd-handle:active{cursor:grabbing}
   .card.drop-hover{outline:2px dashed var(--accent);outline-offset:2px}
-  .mod-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px}
-  .mod-row .grip{color:var(--muted);cursor:grab}
-  .mod-row .name{flex:1}
-  #btnModules{float:right}
 </style>
 </head>
 <body>
-<h1><span class="dot" id="dshDot"></span>PM2 中控台 <span class="muted" style="font-size:13px" id="connInfo"></span></h1>
-<div class="sub" id="subInfo">正在连接… <button class="small" id="btnModules" style="margin-left:10px">🧩 模块显示</button><button class="small" id="btnAlerts" style="margin-left:6px">🔔 告警设置</button></div>
+<div class="layout">
+<aside class="sidebar">
+  <div class="brand"><span class="dot" id="dshDot"></span>PM2 中控台</div>
+  <div class="nav" id="navList">
+    <button class="nav-item" data-cards="card-overview">🏥 总览</button>
+    <button class="nav-item" data-cards="card-pullin,card-services">📋 服务</button>
+    <button class="nav-item" data-cards="card-projects">📦 项目</button>
+    <button class="nav-item" data-cards="card-discover">🔍 进程</button>
+    <button class="nav-item" data-cards="card-logsearch">🔎 日志</button>
+  </div>
+  <div class="side-foot"><button class="small" id="btnAlerts" style="width:100%">🔔 告警设置</button></div>
+</aside>
+<div class="main">
+<div class="sub" id="subInfo">正在连接…</div>
 
 <div class="chips" id="chips"></div>
 
 <div class="card" id="card-overview" data-module="1">
-  <h2><span class="dnd-handle" title="拖动排序">⋮⋮</span>🏥 服务总览 <span class="muted" id="ovInfo"></span></h2>
+  <h2>🏥 服务总览 <span class="muted" id="ovInfo"></span></h2>
   <div id="ovBody"><div class="empty">加载中…</div></div>
 </div>
 
 <div class="card" id="card-pullin" data-module="1">
-  <h2><span class="dnd-handle" title="拖动排序">⋮⋮</span>➕ 拉入新程序（填一条启动命令即可接管）</h2>
+  <h2>➕ 拉入新程序（填一条启动命令即可接管）</h2>
   <div class="row">
     <label>名称</label><input type="text" id="inName" placeholder="例如 my-java-app">
     <label>模板</label>
@@ -133,7 +150,7 @@
 </div>
 
 <div class="card" id="card-discover" data-module="1">
-  <h2><span class="dnd-handle" title="拖动排序">⋮⋮</span>🔍 检测本机正在运行的进程（非系统，可一键拉入托管）</h2>
+  <h2>🔍 检测本机正在运行的进程（非系统，可一键拉入托管）</h2>
   <div class="row" style="margin-bottom:10px">
     <input type="text" id="inDiscoverFilter" placeholder="按名称 / 路径过滤…">
     <button id="btnScan">🔄 扫描</button>
@@ -150,12 +167,12 @@
 </div>
 
 <div class="card" id="card-projects" data-module="1">
-  <h2><span class="dnd-handle" title="拖动排序">⋮⋮</span>📦 项目管理 <button class="small" id="btnNewProject" style="float:right">➕ 新建项目</button></h2>
+  <h2>📦 项目管理 <button class="small" id="btnNewProject" style="float:right">➕ 新建项目</button></h2>
   <div id="projList"><div class="empty">加载中…</div></div>
 </div>
 
 <div class="card" id="card-services" data-module="1">
-  <h2><span class="dnd-handle" title="拖动排序">⋮⋮</span>📋 托管中的服务 <span class="muted" id="countInfo"></span></h2>  <div class="table-wrap">
+  <h2>📋 托管中的服务 <span class="muted" id="countInfo"></span></h2>  <div class="table-wrap">
     <table>
       <thead><tr><th>名称</th><th>分类</th><th>状态</th><th>重启</th><th>运行时长</th><th>CPU</th><th>内存</th><th>启动时间</th><th>操作</th><th>日志</th><th>监控</th><th>页面</th></tr></thead>
       <tbody id="tbody"><tr><td colspan="12" class="empty">加载中…</td></tr></tbody>
@@ -164,7 +181,7 @@
 </div>
 
 <div class="card" id="card-logsearch" data-module="1">
-  <h2><span class="dnd-handle" title="拖动排序">⋮⋮</span>🔎 日志搜索</h2>
+  <h2>🔎 日志搜索</h2>
   <div class="row" style="margin-bottom:8px">
     <input type="text" id="lsQ" placeholder="关键字（如 ERROR / Exception / 500）">
     <select id="lsService" style="flex:0 0 170px"><option value="">全部服务</option></select>
@@ -172,26 +189,29 @@
   </div>
   <pre id="lsResult" style="max-height:280px;overflow:auto;white-space:pre-wrap;word-break:break-all;font-size:12px;background:#0a0e18;border:1px solid var(--border);border-radius:6px;padding:10px;color:#c8d3ea">输入关键字开始搜索（每文件最近 1MB 内）</pre>
 </div>
+</div><!-- /.main -->
+</div><!-- /.layout -->
 
-<div class="card" id="logPanel">
-  <div class="log-head">
-    <h2 style="margin:0">📜 日志：<span id="logTitle" class="mono"></span></h2>
-    <div class="row"><button class="small" id="btnRefreshLog">刷新</button><button class="small" id="btnCloseLog">关闭</button></div>
+<div class="modal-bg" id="logModalBg">
+  <div class="modal" style="width:780px;max-width:94vw">
+    <div class="log-head">
+      <h3 style="margin:0">📜 日志：<span id="logTitle" class="mono"></span></h3>
+      <div class="row"><button class="small" id="btnRefreshLog">刷新</button><button class="small" id="btnCloseLog">关闭</button></div>
+    </div>
+    <pre id="logBody" style="max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-all;font-size:12px;background:#0a0e18;border:1px solid var(--border);border-radius:6px;padding:10px;color:#c8d3ea">…</pre>
   </div>
-  <pre id="logBody">…</pre>
 </div>
 
-<div class="card" id="monPanel">
-  <div class="mon-head">
-    <h2 style="margin:0">📈 监控：<span id="monTitle" class="mono"></span></h2>
-    <div class="row">
-      <span class="muted mono" id="monMeta"></span>
-      <button class="small" id="btnCloseMon">关闭</button>
+<div class="modal-bg" id="monModalBg">
+  <div class="modal" style="width:760px;max-width:94vw">
+    <div class="mon-head">
+      <h3 style="margin:0">📈 监控：<span id="monTitle" class="mono"></span></h3>
+      <div class="row"><span class="muted mono" id="monMeta"></span><button class="small" id="btnCloseMon">关闭</button></div>
     </div>
-  </div>
-  <div class="mon-grid">
-    <div class="mon-item"><div class="t">CPU 使用率（近 90 秒）<span class="muted" id="monCpuNow"></span></div><canvas id="cvCpu" width="560" height="64"></canvas></div>
-    <div class="mon-item"><div class="t">内存占用（近 90 秒）<span class="muted" id="monMemNow"></span></div><canvas id="cvMem" width="560" height="64"></canvas></div>
+    <div class="mon-grid">
+      <div class="mon-item"><div class="t">CPU 使用率（近 90 秒）<span class="muted" id="monCpuNow"></span></div><canvas id="cvCpu" width="560" height="64"></canvas></div>
+      <div class="mon-item"><div class="t">内存占用（近 90 秒）<span class="muted" id="monMemNow"></span></div><canvas id="cvMem" width="560" height="64"></canvas></div>
+    </div>
   </div>
 </div>
 
@@ -258,15 +278,6 @@
     <input type="text" id="metaHealth" placeholder="健康检查地址（如 http://127.0.0.1:8080/health，总览与告警用）">
     <input type="text" id="metaHealthKw" placeholder="健康关键字（可选，响应须包含，如 ok）">
     <div class="row"><button class="primary small" id="btnSaveMeta">保存</button><button class="small" id="btnCloseMeta">关闭</button></div>
-  </div>
-</div>
-
-<div class="modal-bg" id="modModalBg">
-  <div class="modal">
-    <h3>🧩 模块显示管理</h3>
-    <div class="muted" style="font-size:12px;margin-bottom:8px">勾选控制显示/隐藏；页面上拖动标题栏的 ⋮⋮ 可调整顺序（自动保存）</div>
-    <div id="modList"></div>
-    <div class="row" style="margin-top:12px"><button class="small" id="btnCloseMod">关闭</button></div>
   </div>
 </div>
 
@@ -426,20 +437,24 @@ async function doAction(id, action) {
   catch (e) { toast(e.message, true); }
 }
 
-/* ---------- 日志 ---------- */
+/* ---------- 日志（弹窗） ---------- */
+let logProcId = null;
 async function showLog(name, id) {
-  currentLogName = name; $("logPanel").style.display = "block"; $("logTitle").textContent = name;
-  $("btnRefreshLog").onclick = () => refreshLog(id);
-  await refreshLog(id);
+  logProcId = id;
+  $("logTitle").textContent = name;
+  $("logModalBg").style.display = "flex";
+  await refreshLog();
 }
-async function refreshLog(id) {
+async function refreshLog() {
+  if (logProcId === null) return;
   try {
-    const data = await api(`/api/processes/${id}/logs?lines=200`);
+    const data = await api(`/api/processes/${logProcId}/logs?lines=300`);
     $("logBody").textContent = (data.stderr ? "── stderr ──\n" + data.stderr + "\n" : "") + (data.stdout ? "── stdout ──\n" + data.stdout : "") || "(暂无日志)";
     $("logBody").scrollTop = $("logBody").scrollHeight;
   } catch (e) { $("logBody").textContent = "读取日志失败: " + e.message; }
 }
-$("btnCloseLog").onclick = () => { $("logPanel").style.display = "none"; currentLogName = null; };
+$("btnRefreshLog").onclick = refreshLog;
+$("btnCloseLog").onclick = () => { $("logModalBg").style.display = "none"; logProcId = null; };
 
 /* ---------- 监控（实时曲线） ---------- */
 function drawSpark(cv, series, opts) {
@@ -454,9 +469,11 @@ function drawSpark(cv, series, opts) {
 }
 function showMon(name, id) {
   monitor = { name, id }; hist[id] = { cpu: [], mem: [] };
-  $("monPanel").style.display = "block"; $("monTitle").textContent = name;
-  tickMon(); $("btnCloseMon").onclick = () => { monitor = null; $("monPanel").style.display = "none"; };
+  $("monTitle").textContent = name;
+  $("monModalBg").style.display = "flex";
+  tickMon();
 }
+$("btnCloseMon").onclick = () => { monitor = null; $("monModalBg").style.display = "none"; };
 async function tickMon() {
   if (!monitor) return;
   try {
@@ -654,76 +671,15 @@ function pollDeploy(depId, projectId) {
 }
 $("btnCloseDep").onclick = () => { $("depModalBg").style.display = "none"; clearInterval(depTimer); depTimer = null; };
 
-/* ---------- 模块排序与显示 ---------- */
-const LAYOUT_KEY = "pm2-console.layout", HIDDEN_KEY = "pm2-console.hidden";
-const MODULES = [
-  { id: "card-overview", name: "🏥 服务总览" },
-  { id: "card-pullin", name: "➕ 拉入新程序" },
-  { id: "card-discover", name: "🔍 进程扫描" },
-  { id: "card-projects", name: "📦 项目管理" },
-  { id: "card-services", name: "📋 托管服务" },
-  { id: "card-logsearch", name: "🔎 日志搜索" }
-];
-function moduleOrder() { return Array.from(document.querySelectorAll(".card[data-module]")).map((c) => c.id); }
-function saveLayout() { localStorage.setItem(LAYOUT_KEY, JSON.stringify(moduleOrder())); }
-function applyLayout() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(LAYOUT_KEY));
-    if (Array.isArray(saved) && saved.length === MODULES.length) {
-      saved.forEach((id) => { const el = document.getElementById(id); if (el) document.body.appendChild(el); });
-    }
-  } catch (e) { /* 忽略损坏数据 */ }
-  try {
-    const hidden = JSON.parse(localStorage.getItem(HIDDEN_KEY)) || [];
-    hidden.forEach((id) => { const el = document.getElementById(id); if (el) el.style.display = "none"; });
-  } catch (e) { /* 忽略 */ }
+/* ---------- 导航（侧边栏切换模块） ---------- */
+const NAV_KEY = "pm2-console.nav";
+function showModule(cardsStr) {
+  const ids = cardsStr.split(",");
+  document.querySelectorAll(".card[data-module]").forEach((c) => c.classList.toggle("active", ids.includes(c.id)));
+  document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.cards === cardsStr));
+  localStorage.setItem(NAV_KEY, cardsStr);
 }
-let dragModId = null;
-document.querySelectorAll(".dnd-handle").forEach((h) => {
-  h.draggable = true;
-  h.addEventListener("dragstart", (e) => {
-    const card = h.closest(".card");
-    if (!card) return;
-    dragModId = card.id;
-    e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("text/plain", card.id);
-  });
-  h.addEventListener("dragend", () => { dragModId = null; document.querySelectorAll(".card.drop-hover").forEach((c) => c.classList.remove("drop-hover")); });
-});
-document.querySelectorAll(".card[data-module]").forEach((c) => {
-  c.addEventListener("dragover", (e) => { e.preventDefault(); c.classList.add("drop-hover"); });
-  c.addEventListener("dragleave", () => c.classList.remove("drop-hover"));
-  c.addEventListener("drop", (e) => {
-    e.preventDefault();
-    c.classList.remove("drop-hover");
-    if (!dragModId || dragModId === c.id) return;
-    const dragEl = document.getElementById(dragModId);
-    if (!dragEl) return;
-    const all = Array.from(document.querySelectorAll(".card[data-module]"));
-    if (all.indexOf(dragEl) < all.indexOf(c)) c.after(dragEl); else c.before(dragEl);
-    saveLayout();
-  });
-});
-function renderModModal() {
-  const hidden = JSON.parse(localStorage.getItem(HIDDEN_KEY)) || [];
-  $("modList").innerHTML = MODULES.map((m) => `
-    <div class="mod-row"><span class="grip" title="页面上拖动 ⋮⋮ 排序">⋮⋮</span>
-      <span class="name">${m.name}</span>
-      <label style="margin:0"><input type="checkbox" data-mid="${m.id}" ${hidden.includes(m.id) ? "" : "checked"}> 显示</label>
-    </div>`).join("");
-  $("modList").querySelectorAll("input[data-mid]").forEach((cb) => {
-    cb.onchange = () => {
-      let hidden = JSON.parse(localStorage.getItem(HIDDEN_KEY)) || [];
-      const id = cb.dataset.mid;
-      if (cb.checked) hidden = hidden.filter((x) => x !== id); else hidden.push(id);
-      localStorage.setItem(HIDDEN_KEY, JSON.stringify(hidden));
-      const el = document.getElementById(id);
-      if (el) el.style.display = cb.checked ? "" : "none";
-    };
-  });
-}
-$("btnModules").onclick = () => { renderModModal(); $("modModalBg").style.display = "flex"; };
-$("btnCloseMod").onclick = () => { $("modModalBg").style.display = "none"; };
+document.querySelectorAll(".nav-item").forEach((b) => { b.onclick = () => showModule(b.dataset.cards); });
 
 /* ---------- 服务备注与页面 ---------- */
 let metaProc = null;
@@ -831,7 +787,11 @@ async function init() {
     $("subInfo").textContent = `绑定 ${location.host} · 令牌已启用 · ${new Date(st.serverTime).toLocaleString()}`;
   } catch (e) { $("subInfo").textContent = "连接失败：" + e.message; }
   $("inTemplate").onchange();
-  applyLayout();
+  {
+    const saved = localStorage.getItem(NAV_KEY);
+    const valid = document.querySelector(`.nav-item[data-cards="${saved}"]`);
+    showModule(valid ? saved : "card-overview");
+  }
   await loadCats();
   await loadList();
   await loadProjects();
