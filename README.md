@@ -64,6 +64,7 @@ SPRING_PROFILES_ACTIVE=prod
 | `CONSOLE_PORT` | `3090` | 中控台端口 |
 | `CONSOLE_HOST` | `127.0.0.1` | 监听地址（不建议对外开放） |
 | `CONSOLE_TOKEN` | `admin` | 访问令牌，**上线前请务必修改** |
+| `CONSOLE_STATE_DIR` | `<项目>/data` | 分类状态持久化目录 |
 | `DSH_WORKSPACE` | `D:\ai\dsh-workspace` | 「一键拉入 DSH Web」的工作目录 |
 
 修改后重启：`pm2 restart pm2-console --update-env`
@@ -90,7 +91,8 @@ SPRING_PROFILES_ACTIVE=prod
 
 - **后端**：Node.js + Express + [PM2 Node API](https://pm2.keymetrics.io/docs/usage/pm2-api/)
 - **前端**：原生 HTML / CSS / JavaScript（单页，无构建步骤，零前端依赖）
-- **存储**：分类与归属持久化在 `~/.pm2-console/state.json`；进程日志由 PM2 托管
+- **存储**：分类与归属持久化在 `<项目>/data/state.json`（`data/` 不入库，可用 `CONSOLE_STATE_DIR` 覆盖）；
+  进程日志由 PM2 托管在 `$PM2_HOME/logs`（本机部署示例：`D:\ai\dsh-workspace\.runtime\pm2\logs`）
 
 ## 🔒 安全说明
 
@@ -105,8 +107,10 @@ SPRING_PROFILES_ACTIVE=prod
 pm2-console/
 ├── server.js          # 后端：REST API + PM2 封装 + 命令解析
 ├── package.json
-└── public/
-    └── index.html     # 前端：单页控制台
+├── public/
+│   └── index.html     # 前端：单页控制台
+└── data/              # 运行时状态（不入库）
+    └── state.json     # 分类与服务归属
 ```
 
 ## ❓ 常见问题

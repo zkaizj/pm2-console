@@ -24,7 +24,7 @@ const PORT = Number(process.env.CONSOLE_PORT || 3090);
 const TOKEN = process.env.CONSOLE_TOKEN || "admin";
 const PM2_HOME = process.env.PM2_HOME || path.join(os.homedir(), ".pm2");
 const DSH_WORKSPACE = process.env.DSH_WORKSPACE || "D:\\ai\\dsh-workspace";
-const STATE_DIR = path.join(os.homedir(), ".pm2-console");
+const STATE_DIR = process.env.CONSOLE_STATE_DIR || path.join(__dirname, "data");
 const STATE_FILE = path.join(STATE_DIR, "state.json");
 const DEFAULT_CATEGORIES = ["AI 工具", "Web 服务", "Java 应用", "数据库", "工具"];
 
