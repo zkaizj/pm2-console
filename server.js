@@ -111,8 +111,9 @@ function findOnPath(exe) {
   const exts = (process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM;.PS1;.JS;.MJS").split(";").filter(Boolean);
   for (const dir of dirs) {
     const base = path.join(dir, exe);
-    if (fs.existsSync(base)) return base;
+    // 优先按 PATHEXT 找（npm -> npm.cmd）；Node 目录里的无扩展名 npm/npx 是 bash 脚本，不能直接 spawn
     for (const ext of exts) { const cand = base + ext; if (fs.existsSync(cand)) return cand; }
+    if (fs.existsSync(base)) return base;   // 最后兜底（真正无扩展名的可执行文件）
   }
   return null;
 }
