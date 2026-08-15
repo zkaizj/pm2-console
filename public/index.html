@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PM2 中控台</title>
+<style>
+  :root {
+    --bg:#0f1420; --panel:#171e2e; --panel2:#1d2740; --border:#2a3550;
+    --text:#e6ebf5; --muted:#8b97b3; --accent:#4f8cff; --accent2:#38bdf8;
+    --green:#34d399; --red:#f87171; --yellow:#fbbf24; --gray:#64748b;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font:14px/1.6 "Microsoft YaHei",system-ui,sans-serif;padding:20px}
+  h1{font-size:20px;display:flex;align-items:center;gap:10px}
+  h1 .dot{width:10px;height:10px;border-radius:50%;background:var(--gray)}
+  h1 .dot.on{background:var(--green);box-shadow:0 0 8px var(--green)}
+  .sub{color:var(--muted);font-size:12px;margin:4px 0 16px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px}
+  .card h2{font-size:14px;color:var(--accent2);margin-bottom:12px}
+  .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  input[type=text],select,textarea{background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 10px;font-size:13px;flex:1;min-width:150px}
+  textarea{font-family:Consolas,monospace;resize:vertical;min-height:52px}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
+  label{color:var(--muted);font-size:12px;margin-right:4px}
+  button{background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 14px;cursor:pointer;font-size:13px;transition:.15s}
+  button:hover{border-color:var(--accent);color:var(--accent2)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.primary:hover{filter:brightness(1.1);color:#fff}
+  button.danger:hover{border-color:var(--red);color:var(--red)}
+  button.small{padding:4px 10px;font-size:12px}
+  .table-wrap{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+  th{color:var(--muted);font-weight:normal;font-size:12px}
+  tr:hover td{background:rgba(79,140,255,.06)}
+  .status{display:inline-flex;align-items:center;gap:6px}
+  .status i{width:8px;height:8px;border-radius:50%;display:inline-block}
+  .st-online i{background:var(--green);box-shadow:0 0 6px var(--green)}
+  .st-stopped i{background:var(--gray)}
+  .st-errored i{background:var(--red);box-shadow:0 0 6px var(--red)}
+  .st-launching i{background:var(--yellow)}
+  .st-unknown i{background:var(--gray)}
+  .actions{display:flex;gap:6px}
+  .muted{color:var(--muted)}
+  .mono{font-family:Consolas,monospace;font-size:12px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+  .chip{background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:5px 14px;cursor:pointer;font-size:13px;color:var(--muted)}
+  .chip:hover{border-color:var(--accent)}
+  .chip.active{background:var(--accent);border-color:var(--accent);color:#fff}
+  .chip .n{opacity:.75;font-size:11px;margin-left:4px}
+  #logPanel,#monPanel{display:none}
+  #logPanel pre,#monPanel .mon-box{background:#0a0e18;border:1px solid var(--border);border-radius:6px;padding:10px;max-height:320px;overflow:auto;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-all;color:#c8d3ea}
+  .log-head,.mon-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--accent);color:var(--text);padding:10px 18px;border-radius:8px;display:none;z-index:99;box-shadow:0 4px 20px rgba(0,0,0,.4)}
+  .toast.err{border-color:var(--red)}
+  .hint{color:var(--muted);font-size:12px;margin-top:8px}
+  .empty{color:var(--muted);text-align:center;padding:24px}
+  .mon-grid{display:flex;gap:20px;flex-wrap:wrap}
+  .mon-item{flex:1;min-width:260px}
+  .mon-item .t{color:var(--muted);font-size:12px;margin-bottom:4px}
+  canvas{background:#0a0e18;border:1px solid var(--border);border-radius:6px;width:100%;height:64px}
+  .cat-select{max-width:130px;font-size:12px;padding:4px 6px}
+  .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:50}
+  .modal{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:20px;width:420px;max-width:92vw}
+  .modal h3{font-size:15px;margin-bottom:14px}
+  .modal .item{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)}
+  .modal .item .name{flex:1}
+</style>
+</head>
+<body>
+<h1><span class="dot" id="dshDot"></span>PM2 中控台 <span class="muted" style="font-size:13px" id="connInfo"></span></h1>
+<div class="sub" id="subInfo">正在连接…</div>
+
+<div class="chips" id="chips"></div>
+
+<div class="card">
+  <h2>➕ 拉入新程序（填一条启动命令即可接管）</h2>
+  <div class="row">
+    <label>名称</label><input type="text" id="inName" placeholder="例如 my-java-app">
+    <label>模板</label>
+    <select id="inTemplate" style="flex:0 0 150px">
+      <option value="通用命令">通用命令</option>
+      <option value="Java (jar)">Java (jar)</option>
+      <option value="Node 脚本">Node 脚本</option>
+      <option value="Python 脚本">Python 脚本</option>
+      <option value="自定义 exe">自定义 exe</option>
+    </select>
+    <label>分类</label>
+    <select id="inCategory" style="flex:0 0 150px"></select>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <label>启动命令</label><input type="text" id="inCmd" placeholder="例如 node D:\app\server.js --port 8080">
+  </div>
+  <div class="row" style="margin-top:10px">
+    <label>工作目录</label><input type="text" id="inCwd" placeholder="可选">
+    <label>环境变量</label><input type="text" id="inEnv" placeholder="KEY=VALUE，多个用换行，如 JAVA_HOME=C:\Program Files\Java\jdk-21">
+  </div>
+  <div class="row" style="margin-top:12px">
+    <button class="primary" id="btnAdd">🚀 拉入并启动</button>
+    <button id="btnPresetDsh">🐋 一键拉入 DSH Web</button>
+    <button id="btnManageCat">🗂 管理分类</button>
+    <span class="spacer"></span>
+    <span class="muted" style="font-size:12px" id="tmplHint"></span>
+  </div>
+  <div class="hint">支持：node / java / 任意 .exe / .cmd / .bat / .ps1；命令里可带参数，%ENV% 自动展开。</div>
+</div>
+
+<div class="card">
+  <h2>📋 托管中的服务 <span class="muted" id="countInfo"></span></h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>名称</th><th>分类</th><th>状态</th><th>重启</th><th>运行时长</th><th>CPU</th><th>内存</th><th>启动时间</th><th>操作</th><th></th><th></th></tr></thead>
+      <tbody id="tbody"><tr><td colspan="11" class="empty">加载中…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card" id="logPanel">
+  <div class="log-head">
+    <h2 style="margin:0">📜 日志：<span id="logTitle" class="mono"></span></h2>
+    <div class="row"><button class="small" id="btnRefreshLog">刷新</button><button class="small" id="btnCloseLog">关闭</button></div>
+  </div>
+  <pre id="logBody">…</pre>
+</div>
+
+<div class="card" id="monPanel">
+  <div class="mon-head">
+    <h2 style="margin:0">📈 监控：<span id="monTitle" class="mono"></span></h2>
+    <div class="row">
+      <span class="muted mono" id="monMeta"></span>
+      <button class="small" id="btnCloseMon">关闭</button>
+    </div>
+  </div>
+  <div class="mon-grid">
+    <div class="mon-item"><div class="t">CPU 使用率（近 90 秒）<span class="muted" id="monCpuNow"></span></div><canvas id="cvCpu" width="560" height="64"></canvas></div>
+    <div class="mon-item"><div class="t">内存占用（近 90 秒）<span class="muted" id="monMemNow"></span></div><canvas id="cvMem" width="560" height="64"></canvas></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="catModalBg">
+  <div class="modal">
+    <h3>🗂 分类管理</h3>
+    <div id="catList"></div>
+    <div class="row" style="margin-top:12px">
+      <input type="text" id="newCatName" placeholder="新分类名称">
+      <button class="primary small" id="btnNewCat">添加</button>
+      <button class="small" id="btnCloseCat">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let TOKEN = localStorage.getItem("consoleToken") || "";
+let CATS = [], FILTER = "全部", monitor = null, hist = {}, currentLogName = null;
+
+async function api(path, opts = {}) {
+  const headers = Object.assign({ "X-Console-Token": TOKEN }, opts.headers || {});
+  if (opts.body) headers["Content-Type"] = "application/json";
+  const res = await fetch(path, { method: opts.method || "GET", headers, body: opts.body ? JSON.stringify(opts.body) : undefined });
+  if (res.status === 401) {
+    const t = prompt("请输入中控台令牌（服务端 CONSOLE_TOKEN，默认 admin）:");
+    if (t === null) throw new Error("未授权");
+    TOKEN = t; localStorage.setItem("consoleToken", t);
+    return api(path, opts);
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+function toast(msg, isErr = false) {
+  const el = $("toast"); el.textContent = msg; el.className = "toast" + (isErr ? " err" : ""); el.style.display = "block";
+  clearTimeout(el._t); el._t = setTimeout(() => (el.style.display = "none"), 3500);
+}
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+function shortPath(p){ if(!p) return "-"; const s=p.replace(/\\/g,"/"); return s.length>40 ? "…"+s.slice(-40) : s; }
+function fmtUptime(ms){ if(ms===null||ms===undefined) return "-"; let s=Math.floor(ms/1000); const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600),m=Math.floor((s%3600)/60); s%=60;
+  if(d)return `${d}天${h}时`; if(h)return `${h}时${m}分`; if(m)return `${m}分${s}秒`; return `${s}秒`; }
+function fmtBytes(b){ if(b===null||b===undefined)return "-"; const u=["B","KB","MB","GB"];let i=0; while(b>=1024&&i<u.length-1){b/=1024;i++;} return b.toFixed(i?1:0)+" "+u[i]; }
+function fmtCpu(c){ return c===undefined||c===null?"-":c.toFixed(1)+"%"; }
+const SCLASS = { online:"st-online", stopped:"st-stopped", errored:"st-errored", error:"st-errored", launching:"st-launching","one-launch-status":"st-launching" };
+const SZH = { online:"运行中", stopped:"已停止", errored:"异常", error:"异常", launching:"启动中","one-launch-status":"启动中", unknown:"未知" };
+const TM_PLACEHOLDER = {
+  "通用命令":"node D:\\app\\server.js --port 8080",
+  "Java (jar)":"java -Xmx512m -jar D:\\app\\app.jar --server.port=8080",
+  "Node 脚本":"node D:\\app\\server.js",
+  "Python 脚本":"python D:\\app\\main.py",
+  "自定义 exe":"D:\\tools\\myapp\\myapp.exe --flag"
+};
+
+/* ---------- 分类 ---------- */
+async function loadCats() {
+  const d = await api("/api/categories");
+  CATS = d.categories || [];
+  const sc = d.serviceCategory || {};
+  const fillCatSelect = (sel, cur) => {
+    const opts = [...CATS, "未分类"];
+    sel.innerHTML = opts.map((c) => `<option value="${esc(c)}" ${c === cur ? "selected" : ""}>${esc(c)}</option>`)
+      + `<option value="__new__">＋ 新分类…</option>`;
+  };
+  fillCatSelect($("inCategory"), null);
+  const chips = $("chips");
+  const count = (c) => { let n = 0; for (const k in sc) if ((sc[k] || "未分类") === c) n++; return n; };
+  chips.innerHTML = `<span class="chip ${FILTER==="全部"?"active":""}" data-f="全部">全部 <span class="n">${Object.keys(sc).length}</span></span>`
+    + [...CATS.map((c) => `<span class="chip ${FILTER===c?"active":""}" data-f="${esc(c)}">${esc(c)} <span class="n">${count(c)}</span></span>`),
+       `<span class="chip ${FILTER==="未分类"?"active":""}" data-f="未分类">未分类 <span class="n">${count("未分类")}</span></span>`].join("");
+  chips.querySelectorAll(".chip").forEach((ch) => ch.onclick = () => { FILTER = ch.dataset.f; loadCats(); loadList(); });
+}
+
+$("inTemplate").onchange = () => {
+  $("inCmd").placeholder = TM_PLACEHOLDER[$("inTemplate").value] || "";
+  $("tmplHint").textContent = `示例：${TM_PLACEHOLDER[$("inTemplate").value] || ""}`;
+};
+$("inCategory").onchange = async () => {
+  if ($("inCategory").value === "__new__") {
+    const n = prompt("新分类名称：");
+    if (n && n.trim()) { await api("/api/categories", { method: "POST", body: { name: n.trim() } }); await loadCats(); }
+    else $("inCategory").value = "未分类";
+  }
+};
+$("btnNewCat").onclick = async () => {
+  const n = $("newCatName").value.trim();
+  if (!n) return toast("分类名不能为空", true);
+  try { await api("/api/categories", { method: "POST", body: { name: n } }); $("newCatName").value = ""; await loadCats(); await loadList(); toast("已添加分类：" + n); }
+  catch (e) { toast(e.message, true); }
+};
+$("btnManageCat").onclick = () => { renderCatModal(); $("catModalBg").style.display = "flex"; };
+$("btnCloseCat").onclick = () => { $("catModalBg").style.display = "none"; };
+function renderCatModal() {
+  $("catList").innerHTML = CATS.map((c) => `
+    <div class="item"><span class="name">${esc(c)}</span>
+      <button class="small" onclick="renameCat('${esc(c)}')">✎ 重命名</button>
+      <button class="small danger" onclick="delCat('${esc(c)}')">🗑 删除</button>
+    </div>`).join("") + `<div class="item muted" style="border:none">未分类为内置分类，不可管理</div>`;
+}
+async function renameCat(old) {
+  const n = prompt(`重命名分类「${old}」为：`, old);
+  if (n && n.trim() && n.trim() !== old) {
+    try { await api(`/api/categories/${encodeURIComponent(old)}`, { method: "PATCH", body: { name: n.trim() } }); await loadCats(); await loadList(); toast("已重命名"); }
+    catch (e) { toast(e.message, true); }
+  }
+}
+async function delCat(c) {
+  if (!confirm(`删除分类「${c}」？其下服务将归入「未分类」。`)) return;
+  try { await api(`/api/categories/${encodeURIComponent(c)}`, { method: "DELETE" }); await loadCats(); await loadList(); toast("已删除分类"); }
+  catch (e) { toast(e.message, true); }
+}
+
+/* ---------- 进程列表 ---------- */
+let ALL = [];
+async function loadList() {
+  try {
+    const data = await api("/api/processes");
+    ALL = data.processes || [];
+    $("dshDot").className = "dot on";
+    $("connInfo").textContent = "· PM2 已连接";
+    const list = FILTER === "全部" ? ALL : ALL.filter((p) => (p.category || "未分类") === FILTER);
+    $("countInfo").textContent = `（${list.length}/${ALL.length}）`;
+    if (!list.length) { $("tbody").innerHTML = `<tr><td colspan="11" class="empty">${ALL.length ? "该分类下暂无服务" : "暂无托管服务，用上方表单拉入第一个吧"}</td></tr>`; return; }
+    const catOptions = ["未分类", ...CATS].map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
+    $("tbody").innerHTML = list.map((p) => `
+      <tr>
+        <td><b>${esc(p.name)}</b></td>
+        <td><select class="cat-select" onchange="setCat(${p.id}, this.value)">${catOptions.replace(`value="${esc(p.category||"未分类")}"`, `value="${esc(p.category||"未分类")}" selected`)}</select></td>
+        <td><span class="status ${SCLASS[p.status]||"st-unknown"}"><i></i>${SZH[p.status]||p.status}</span></td>
+        <td class="mono">${p.restartCount}</td>
+        <td class="mono">${fmtUptime(p.uptimeMs)}</td>
+        <td class="mono">${fmtCpu(p.cpu)}</td>
+        <td class="mono">${fmtBytes(p.memory)}</td>
+        <td class="mono muted">${p.createdAt ? new Date(p.createdAt).toLocaleString() : "-"}</td>
+        <td><div class="actions">
+          ${p.status !== "online" ? `<button class="small" onclick="doAction(${p.id},'start')">▶ 启动</button>` : ""}
+          ${p.status === "online" ? `<button class="small" onclick="doAction(${p.id},'stop')">⏹ 停止</button>` : ""}
+          <button class="small" onclick="doAction(${p.id},'restart')">🔄 重启</button>
+          <button class="small danger" onclick="doAction(${p.id},'delete')">🗑 删除</button>
+        </div></td>
+        <td><button class="small" onclick="showLog('${esc(p.name)}',${p.id})">📜 日志</button></td>
+        <td><button class="small" onclick="showMon('${esc(p.name)}',${p.id})">📈 监控</button></td>
+      </tr>`).join("");
+  } catch (e) {
+    $("dshDot").className = "dot"; $("connInfo").textContent = "· 连接失败";
+    $("tbody").innerHTML = `<tr><td colspan="11" class="empty">${esc(e.message)}</td></tr>`;
+  }
+}
+async function setCat(id, cat) {
+  if (cat === "__new__") return;
+  try { const r = await api(`/api/processes/${id}/category`, { method: "POST", body: { category: cat } }); toast(`「${r.name}」已归入「${cat}」`); await loadList(); }
+  catch (e) { toast(e.message, true); loadList(); }
+}
+async function doAction(id, action) {
+  try { const r = await api(`/api/processes/${id}/action`, { method: "POST", body: { action } }); toast(`${action==="delete"?"已删除":"操作成功"}：${r.id}`); setTimeout(loadList, 700); }
+  catch (e) { toast(e.message, true); }
+}
+
+/* ---------- 日志 ---------- */
+async function showLog(name, id) {
+  currentLogName = name; $("logPanel").style.display = "block"; $("logTitle").textContent = name;
+  $("btnRefreshLog").onclick = () => refreshLog(id);
+  await refreshLog(id);
+}
+async function refreshLog(id) {
+  try {
+    const data = await api(`/api/processes/${id}/logs?lines=200`);
+    $("logBody").textContent = (data.stderr ? "── stderr ──\n" + data.stderr + "\n" : "") + (data.stdout ? "── stdout ──\n" + data.stdout : "") || "(暂无日志)";
+    $("logBody").scrollTop = $("logBody").scrollHeight;
+  } catch (e) { $("logBody").textContent = "读取日志失败: " + e.message; }
+}
+$("btnCloseLog").onclick = () => { $("logPanel").style.display = "none"; currentLogName = null; };
+
+/* ---------- 监控（实时曲线） ---------- */
+function drawSpark(cv, series, opts) {
+  const ctx = cv.getContext("2d"), w = cv.width, h = cv.height;
+  ctx.clearRect(0, 0, w, h);
+  if (!series.length) return;
+  const max = opts.max != null ? opts.max : Math.max(...series) * 1.1 || 1;
+  ctx.beginPath(); ctx.strokeStyle = opts.color; ctx.lineWidth = 1.5;
+  const step = w / (series.length - 1 || 1);
+  series.forEach((v, i) => { const x = i * step, y = h - (Math.min(v, max) / max) * (h - 4) - 2; i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  ctx.stroke();
+}
+function showMon(name, id) {
+  monitor = { name, id }; hist[id] = { cpu: [], mem: [] };
+  $("monPanel").style.display = "block"; $("monTitle").textContent = name;
+  tickMon(); $("btnCloseMon").onclick = () => { monitor = null; $("monPanel").style.display = "none"; };
+}
+async function tickMon() {
+  if (!monitor) return;
+  try {
+    const data = await api("/api/processes");
+    const p = (data.processes || []).find((x) => x.id === monitor.id);
+    if (p) {
+      const h = hist[monitor.id] || { cpu: [], mem: [] };
+      h.cpu.push(p.cpu || 0); h.mem.push(p.memory || 0);
+      if (h.cpu.length > 60) h.cpu.shift();
+      if (h.mem.length > 60) h.mem.shift();
+      hist[monitor.id] = h;
+      drawSpark($("cvCpu"), h.cpu, { max: 100, color: "#4f8cff" });
+      drawSpark($("cvMem"), h.mem, { color: "#34d399" });
+      $("monCpuNow").textContent = `当前 ${fmtCpu(p.cpu)}`;
+      $("monMemNow").textContent = `当前 ${fmtBytes(p.memory)}`;
+      $("monMeta").textContent = `状态:${SZH[p.status] || p.status} · 重启:${p.restartCount} · 运行:${fmtUptime(p.uptimeMs)}`;
+    }
+  } catch (e) { /* 忽略瞬时错误，下一轮重试 */ }
+  setTimeout(tickMon, 1500);
+}
+
+/* ---------- 拉入 ---------- */
+$("btnAdd").onclick = async () => {
+  const name = $("inName").value.trim(), command = $("inCmd").value.trim(), cwd = $("inCwd").value.trim(), env = $("inEnv").value.trim();
+  let category = $("inCategory").value;
+  if (category === "__new__") { toast("请先在分类下拉里创建新分类", true); return; }
+  if (!name || !command) return toast("名称和启动命令都要填", true);
+  try {
+    const r = await api("/api/processes", { method: "POST", body: { name, command, cwd, env, category } });
+    toast(r.message || ("已启动 " + name));
+    $("inName").value = ""; $("inCmd").value = ""; $("inCwd").value = ""; $("inEnv").value = "";
+    setTimeout(loadList, 800);
+  } catch (e) { toast(e.message, true); }
+};
+$("btnPresetDsh").onclick = async () => {
+  try { const r = await api("/api/presets/dsh", { method: "POST" }); toast(r.message + "（" + (r.note || "") + "）"); setTimeout(loadList, 800); }
+  catch (e) { toast(e.message, true); }
+};
+
+/* ---------- 启动 ---------- */
+async function init() {
+  try {
+    const st = await api("/api/status");
+    $("subInfo").textContent = `绑定 ${location.host} · 令牌已启用 · ${new Date(st.serverTime).toLocaleString()}`;
+  } catch (e) { $("subInfo").textContent = "连接失败：" + e.message; }
+  $("inTemplate").onchange();
+  await loadCats();
+  await loadList();
+  setInterval(loadList, 3000);
+}
+init();
+</script>
+</body>
+</html>
