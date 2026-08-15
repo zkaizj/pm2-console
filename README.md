@@ -101,6 +101,26 @@ SPRING_PROFILES_ACTIVE=prod
 - 中控台可对 PM2 内进程做任意启停，令牌等同本机管理员权限，**切勿泄露**
 - 建议修改默认令牌后再对外展示或长期使用
 
+## ⚠️ 已知问题与修复：Windows 下 dsh 反复弹控制台窗口
+
+**现象**：在 Windows 上用 PM2 / 服务 / CI 等**无控制台后台方式**运行 dsh 时，agent 每次执行命令都会闪现一个黑窗口（子进程 `pwsh` / `taskkill` 被拉起）。cmd 窗口直接运行时不会出现。
+
+**根因**：`@deepseek-ai/dsh-subprocess-local` 的 `child_process.spawn/spawnSync` 未设置 `windowsHide: true`。无控制台父进程 spawn 控制台子进程时，Windows 会为子进程新建可见控制台。（官方仓库已有人提过该 issue）
+
+**修复**：运行本项目的补丁脚本（幂等，可重复执行）：
+
+```sh
+# PowerShell（本机 dsh 在 npx 缓存里安装时）
+powershell -ExecutionPolicy Bypass -File scripts\patch-dsh-windowshide.ps1
+
+# 或通过 npm script
+npm run patch:windowshide
+```
+
+然后重启 dsh：`pm2 restart dsh-web`（或重启你的 dsh 进程）。
+
+**注意**：dsh **升级**或 **npx 缓存被清理**后补丁会丢失，重新运行上面的脚本即可。
+
 ## 📁 目录结构
 
 ```
@@ -109,6 +129,8 @@ pm2-console/
 ├── package.json
 ├── public/
 │   └── index.html     # 前端：单页控制台
+├── scripts/
+│   └── patch-dsh-windowshide.ps1   # 修复 dsh Windows 弹窗补丁（可重复执行）
 └── data/              # 运行时状态（不入库）
     └── state.json     # 分类与服务归属
 ```

@@ -4,7 +4,8 @@
   "description": "PM2 web console - control panel for background services",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "patch:windowshide": "powershell -ExecutionPolicy Bypass -File scripts/patch-dsh-windowshide.ps1"
   },
   "dependencies": {
     "express": "^4.21.2",
