@@ -343,7 +343,11 @@ async function loadCats() {
     chips.innerHTML = `<span class="chip ${FILTER==="全部"?"active":""}" data-f="全部">全部 <span class="n">${Object.keys(sc).length}</span></span>`
       + [...CATS.map((c) => `<span class="chip ${FILTER===c?"active":""}" data-f="${esc(c)}">${esc(c)} <span class="n">${count(c)}</span></span>`),
          `<span class="chip ${FILTER==="未分类"?"active":""}" data-f="未分类">未分类 <span class="n">${count("未分类")}</span></span>`].join("");
-    chips.querySelectorAll(".chip").forEach((ch) => ch.onclick = () => { FILTER = ch.dataset.f; loadCats(); loadList(); });
+    chips.querySelectorAll(".chip").forEach((ch) => ch.onclick = () => {
+      FILTER = ch.dataset.f;
+      chips.querySelectorAll(".chip").forEach((x) => x.classList.toggle("active", x === ch));  // 即时高亮
+      renderList(); renderHealth();                                                           // 纯本地过滤，无需等待接口
+    });
   } catch (e) { showBanner("分类加载失败：" + e.message); }
 }
 
@@ -392,13 +396,25 @@ async function loadList() {
   try {
     const data = await api("/api/processes");
     ALL = data.processes || [];
-    $("dshDot").className = "dot on";
-    $("connInfo").textContent = "· PM2 已连接";
-    const list = FILTER === "全部" ? ALL : ALL.filter((p) => (p.category || "未分类") === FILTER);
-    $("countInfo").textContent = `（${list.length}/${ALL.length}）`;
-    if (!list.length) { $("tbody").innerHTML = `<tr><td colspan="12" class="empty">${ALL.length ? "该分类下暂无服务" : "暂无托管服务，用上方表单拉入第一个吧"}</td></tr>`; return; }
-    const catOptions = ["未分类", ...CATS].map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
-    $("tbody").innerHTML = list.map((p) => `
+    renderList();
+  } catch (e) {
+    const dot = $("dshDot"); if (dot) dot.className = "dot";
+    const ci = $("connInfo"); if (ci) ci.textContent = "· 连接失败";
+    const tb = $("tbody"); if (tb) tb.innerHTML = `<tr><td colspan="12" class="empty">${esc(e.message)}</td></tr>`;
+    showBanner("服务列表加载失败：" + e.message);
+  }
+  fillLsService();
+}
+/** 纯本地渲染（不请求接口）——分类切换即时生效 */
+function renderList() {
+  const dot = $("dshDot"); if (dot) dot.className = "dot on";
+  const ci = $("connInfo"); if (ci) ci.textContent = "· PM2 已连接";
+  const list = FILTER === "全部" ? ALL : ALL.filter((p) => (p.category || "未分类") === FILTER);
+  const count = $("countInfo"); if (count) count.textContent = `（${list.length}/${ALL.length}）`;
+  const tb = $("tbody"); if (!tb) return;
+  if (!list.length) { tb.innerHTML = `<tr><td colspan="12" class="empty">${ALL.length ? "该分类下暂无服务" : "暂无托管服务，用上方表单拉入第一个吧"}</td></tr>`; return; }
+  const catOptions = ["未分类", ...CATS].map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
+  tb.innerHTML = list.map((p) => `
       <tr>
         <td><b>${esc(p.name)}</b>${p.remark ? `<div class="muted" style="font-size:11px">${esc(p.remark)}</div>` : ""}</td>
         <td><select class="cat-select" onchange="setCat(${p.id}, this.value)">${catOptions.replace(`value="${esc(p.category||"未分类")}"`, `value="${esc(p.category||"未分类")}" selected`)}</select></td>
@@ -421,13 +437,6 @@ async function loadList() {
           ${p.webUrl ? `<button class="small" onclick="openUrl('${esc(p.webUrl)}')" title="${esc(p.webUrl)}">🌐 打开</button>` : ""}
         </div></td>
       </tr>`).join("");
-  } catch (e) {
-    const dot = $("dshDot"); if (dot) dot.className = "dot";
-    const ci = $("connInfo"); if (ci) ci.textContent = "· 连接失败";
-    const tb = $("tbody"); if (tb) tb.innerHTML = `<tr><td colspan="12" class="empty">${esc(e.message)}</td></tr>`;
-    showBanner("服务列表加载失败：" + e.message);
-  }
-  fillLsService();
 }
 function fillLsService() {
   const sel = $("lsService"), cur = sel.value;
@@ -729,36 +738,41 @@ async function loadHealth() {
   try {
     const d = await api("/api/health");
     HEALTH = d;
-    const all = d.services || [];
-    // 总览同样受分类过滤影响（与服务页一致）
-    const services = FILTER === "全部" ? all : all.filter((s) => (s.category || "未分类") === FILTER);
-    const s = {
-      total: services.length,
-      online: services.filter((x) => x.status === "online").length,
-      unhealthy: services.filter((x) => x.hasHealth && x.health && !x.health.ok).length
-    };
-    if (d.enabled === false) {
-      $("ovInfo").textContent = "健康检查已关闭";
-      $("ovBody").innerHTML = `<div class="empty">健康检查已关闭 —— 需要时点侧边栏「🔔 告警设置」勾选「启用健康巡检」。</div>`;
-      return;
-    }
-    $("ovInfo").textContent = `共 ${s.total} · 在线 ${s.online} · 健康异常 ${s.unhealthy}`;
-    if (!services.length) { $("ovBody").innerHTML = '<div class="empty">该分类下暂无服务</div>'; return; }
-    $("ovBody").innerHTML = `<table><thead><tr><th>服务</th><th>PM2 状态</th><th>健康检查</th><th>延迟</th><th>页面</th></tr></thead><tbody>`
-      + services.map((x) => {
-          const h = x.health;
-          const hc = x.hasHealth
-            ? (h ? `<span class="status ${h.ok ? "st-online" : "st-errored"}"><i></i>${h.ok ? "正常" : "异常"}</span>` : '<span class="muted">检测中…</span>')
-            : '<span class="muted">未配置</span>';
-          const lat = x.hasHealth && h ? `${h.latencyMs}ms` : "-";
-          return `<tr>
-            <td><b>${esc(x.name)}</b></td>
-            <td><span class="status ${SCLASS[x.status] || "st-unknown"}"><i></i>${SZH[x.status] || x.status}</span></td>
-            <td>${hc}</td><td class="mono muted">${lat}</td>
-            <td>${x.webUrl ? `<button class="small" onclick="openUrl('${esc(x.webUrl)}')">🌐</button>` : "-"}</td>
-          </tr>`;
-        }).join("") + "</tbody></table>";
+    renderHealth();
   } catch (e) { $("ovInfo").textContent = "总览加载失败"; }
+}
+/** 纯本地渲染（不请求接口）——分类切换即时生效 */
+function renderHealth() {
+  if (!HEALTH) return;
+  const d = HEALTH;
+  const all = d.services || [];
+  const services = FILTER === "全部" ? all : all.filter((s) => (s.category || "未分类") === FILTER);
+  const s = {
+    total: services.length,
+    online: services.filter((x) => x.status === "online").length,
+    unhealthy: services.filter((x) => x.hasHealth && x.health && !x.health.ok).length
+  };
+  if (d.enabled === false) {
+    $("ovInfo").textContent = "健康检查已关闭";
+    $("ovBody").innerHTML = `<div class="empty">健康检查已关闭 —— 需要时点侧边栏「🔔 告警设置」勾选「启用健康巡检」。</div>`;
+    return;
+  }
+  $("ovInfo").textContent = `共 ${s.total} · 在线 ${s.online} · 健康异常 ${s.unhealthy}`;
+  if (!services.length) { $("ovBody").innerHTML = '<div class="empty">该分类下暂无服务</div>'; return; }
+  $("ovBody").innerHTML = `<table><thead><tr><th>服务</th><th>PM2 状态</th><th>健康检查</th><th>延迟</th><th>页面</th></tr></thead><tbody>`
+    + services.map((x) => {
+        const h = x.health;
+        const hc = x.hasHealth
+          ? (h ? `<span class="status ${h.ok ? "st-online" : "st-errored"}"><i></i>${h.ok ? "正常" : "异常"}</span>` : '<span class="muted">检测中…</span>')
+          : '<span class="muted">未配置</span>';
+        const lat = x.hasHealth && h ? `${h.latencyMs}ms` : "-";
+        return `<tr>
+          <td><b>${esc(x.name)}</b></td>
+          <td><span class="status ${SCLASS[x.status] || "st-unknown"}"><i></i>${SZH[x.status] || x.status}</span></td>
+          <td>${hc}</td><td class="mono muted">${lat}</td>
+          <td>${x.webUrl ? `<button class="small" onclick="openUrl('${esc(x.webUrl)}')">🌐</button>` : "-"}</td>
+        </tr>`;
+      }).join("") + "</tbody></table>";
 }
 
 /* ---------- 日志搜索 ---------- */
