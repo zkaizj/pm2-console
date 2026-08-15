@@ -642,7 +642,18 @@ async function runPipeline(project, kind) {
   DEPLOYS.set(dep.id, dep);
   if (DEPLOYS.size > 100) { const first = DEPLOYS.keys().next().value; DEPLOYS.delete(first); }
   const repo = project.repoDir;
-  const finish = (status, errorStep) => { dep.status = status; dep.finishedAt = new Date().toISOString(); dep.errorStep = errorStep; };
+  let historyRecorded = false;
+  const recordHistory = (result) => {
+    if (historyRecorded) return;
+    historyRecorded = true;
+    project.deployHistory = project.deployHistory || [];
+    project.deployHistory.unshift({ at: dep.startedAt, kind, commit: dep.commit, msg: dep.commitMsg || "", result });
+    project.deployHistory = project.deployHistory.slice(0, 50);
+  };
+  const finish = (status, errorStep) => {
+    dep.status = status; dep.finishedAt = new Date().toISOString(); dep.errorStep = errorStep;
+    if (status === "fail") recordHistory(dep.autoRolledBack ? "fail-rollback" : "fail");
+  };
   try {
     const isGit = await captureCommand(`git -C "${repo}" rev-parse --is-inside-work-tree`, repo);
     if (!isGit.ok || String(isGit.output).trim() !== "true") { const s = { name: "git 检查", state: "fail", output: isGit.output || "不是 git 仓库" }; dep.steps.push(s); return finish("fail", "git 检查"), dep; }
@@ -688,9 +699,9 @@ async function runPipeline(project, kind) {
       if (ok) { s.state = "done"; s.output += "✅ 健康检查通过\n"; }
       else {
         s.state = "fail";
-        s.output += "❌ 健康检查未通过，自动回滚到上次成功版本...\n";
-        dep.autoRolledBack = true;
+        dep.autoRolledBack = !!project.lastGoodCommit;
         if (project.lastGoodCommit) {
+          s.output += "❌ 健康检查未通过，自动回滚到上次成功版本...\n";
           await runCommandInto("自动回滚: git reset", `git -C "${repo}" reset --hard ${project.lastGoodCommit}`, repo, dep.steps);
           if (project.installCmd) await runCommandInto("自动回滚: 安装依赖", project.installCmd, repo, dep.steps);
           if (project.buildCmd) await runCommandInto("自动回滚: 构建", project.buildCmd, repo, dep.steps);
@@ -699,15 +710,15 @@ async function runPipeline(project, kind) {
             dep.steps.push({ name: "自动回滚: 重启服务", state: r2.ok ? "done" : "fail", output: r2.ok ? "已重启" : r2.msg });
           }
           dep.steps.push({ name: "自动回滚完成", state: "done", output: `已回滚到 ${project.lastGoodCommit.slice(0, 8)}` });
+        } else {
+          s.output += "❌ 健康检查未通过，且没有上次成功版本可回滚（首次部署）\n";
         }
         return finish("fail", "部署后健康检查"), dep;
       }
     }
     finish("ok", null);
     if (kind === "deploy" && dep.commit) project.lastGoodCommit = dep.commit;
-    project.deployHistory = project.deployHistory || [];
-    project.deployHistory.unshift({ at: dep.startedAt, kind, commit: dep.commit, msg: dep.commitMsg || "", result: "ok" });
-    project.deployHistory = project.deployHistory.slice(0, 50);
+    recordHistory("ok");
     saveProjects();
   } catch (e) {
     dep.steps.push({ name: "异常", state: "fail", output: String(e && e.stack ? e.stack : e) });
