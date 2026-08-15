@@ -17,6 +17,8 @@
 - **实时监控**：列表 3 秒自动刷新（状态 / CPU / 内存 / 重启次数 / 运行时长 / 启动时间）；
   每个进程有监控面板：近 90 秒 **CPU / 内存趋势曲线** + **实时日志尾部**
 - **一键掌控**：启动 / 停止 / 重启 / 删除，全部网页上完成
+- **项目管理（P0）**：登记开发项目（git 地址/目录/框架/安装/构建命令）→ 一键部署流水线
+  （git 检查 → pull → 装依赖 → 构建 → 重启服务）→ 发布历史 → 一键回滚到上次成功版本
 - **进程发现与拉入**：扫描本机正在运行的非系统进程，一键把任意程序"拉入" pm2 托管
   （自动读取启动命令重建托管，可选"拉入并停原进程"避免端口冲突）
 - **DSH 预设**：一键拉入 `dsh-web`（DeepSeek Harness Web）
@@ -132,6 +134,13 @@ schtasks /Create /SC ONLOGON /TN "pm2-resurrect" /TR "D:\path\to\pm2-resurrect.c
 | GET | `/api/processes/:id/logs?lines=200` | 日志尾部 |
 | GET | `/api/discover` | 扫描本机非系统进程（排除已托管） |
 | POST | `/api/discover/:pid/import` | 拉入进程 `{name?, category?, stopOriginal?, cwd?}` |
+| GET | `/api/projects` | 项目列表（含关联服务状态） |
+| POST | `/api/projects` | 新建项目 |
+| PATCH | `/api/projects/:id` | 更新项目 |
+| DELETE | `/api/projects/:id` | 删除项目档案 |
+| POST | `/api/projects/:id/deploy` | 一键部署（git pull→安装→构建→重启） |
+| POST | `/api/projects/:id/rollback` | 回滚到上次成功版本 |
+| GET | `/api/projects/:id/deploys/:deployId` | 部署进度/日志 |
 | POST | `/api/presets/dsh` | 一键拉入 DSH Web |
 
 所有 `/api` 请求需携带请求头：`X-Console-Token: <你的令牌>`
