@@ -107,19 +107,15 @@ SPRING_PROFILES_ACTIVE=prod
 
 **根因**：`@deepseek-ai/dsh-subprocess-local` 的 `child_process.spawn/spawnSync` 未设置 `windowsHide: true`。无控制台父进程 spawn 控制台子进程时，Windows 会为子进程新建可见控制台。（官方仓库已有人提过该 issue）
 
-**修复**：运行本项目的补丁脚本（幂等，可重复执行）：
+**修复**：运行本项目的补丁脚本（幂等，可重复执行）。脚本默认使用 **PowerShell 7（pwsh）**，未安装时自动回退 PowerShell 5.1；打上补丁后**自动重启 pm2 托管的 dsh-web**，无需手动操作：
 
 ```sh
-# PowerShell（本机 dsh 在 npx 缓存里安装时）
-powershell -ExecutionPolicy Bypass -File scripts\patch-dsh-windowshide.ps1
-
-# 或通过 npm script
 npm run patch:windowshide
 ```
 
-然后重启 dsh：`pm2 restart dsh-web`（或重启你的 dsh 进程）。
+（也可以直接运行：`powershell -ExecutionPolicy Bypass -File scripts\patch-dsh-windowshide.ps1`）
 
-**注意**：dsh **升级**或 **npx 缓存被清理**后补丁会丢失，重新运行上面的脚本即可。
+**注意**：dsh **升级**或 **npx 缓存被清理**后补丁会丢失，重新运行上面的脚本即可（会自动重打并重启）。
 
 ## 📁 目录结构
 

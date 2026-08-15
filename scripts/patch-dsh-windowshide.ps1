@@ -1,6 +1,7 @@
 ﻿# 修复 dsh 在 Windows 上执行命令时弹控制台窗口的问题
 # 原理：dsh-subprocess-local 的 spawn 没设 windowsHide，导致每个子进程闪一个黑窗口。
 # dsh 升级或 npx 缓存重建后补丁会丢失，运行本脚本即可重新打上（幂等）。
+# 打完补丁会自动重启 pm2 托管的 dsh-web，无需手动操作。
 $ErrorActionPreference = 'Stop'
 $target = 'node_modules\@deepseek-ai\dsh-subprocess-local\lib\index.js'
 $cacheRoot = Join-Path $env:LOCALAPPDATA 'npm-cache\_npx'
@@ -33,4 +34,18 @@ if (Test-Path $cacheRoot) {
 } else {
   Write-Output "未找到 npx 缓存: $cacheRoot"
 }
-Write-Output "完成，共处理 $patched 个文件。重启 dsh-web 后生效（pm2 restart dsh-web）。"
+
+if ($patched -gt 0) {
+  Write-Output "补丁已生效，正在自动重启 dsh-web ..."
+  $procs = @()
+  try { $procs = pm2 jlist 2>$null | ConvertFrom-Json } catch {}
+  $dw = $procs | Where-Object { $_.name -eq 'dsh-web' }
+  if ($dw) {
+    pm2 restart dsh-web 2>&1 | Out-Null
+    Write-Output "dsh-web 已自动重启，修复生效。"
+  } else {
+    Write-Output "未检测到 pm2 托管的 dsh-web，请手动重启你的 dsh 进程。"
+  }
+} else {
+  Write-Output "补丁已是最新，无需重启。"
+}
