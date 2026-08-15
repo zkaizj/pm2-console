@@ -292,15 +292,25 @@ app.get("/api/processes/:id/logs", (req, res) => {
 app.post("/api/presets/dsh", (req, res) => {
   const bin = resolveDshEntry();
   if (!bin) return res.status(500).json({ error: "未找到 dsh 入口（npm 缓存里没有 @deepseek-ai/dsh），请先用 npx 运行过一次" });
-  state.serviceCategory["dsh-web"] = "AI 工具";
-  saveState();
-  pm2.start({
-    name: "dsh-web", script: process.execPath, args: [bin, "web"], cwd: DSH_WORKSPACE,
-    interpreter: "none", autorestart: true, max_restarts: 20, min_uptime: "2s", kill_timeout: 10000
-  }, (err) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json({ ok: true, message: "dsh-web 已拉入（分类：AI 工具）", note: "浏览器访问 http://127.0.0.1:3080" });
+  // 端口预检：3080 被占用说明有别的 dsh 实例在跑，先提示，避免拉起后崩溃循环
+  const net = require("net");
+  const probe = net.connect({ host: "127.0.0.1", port: 3080 });
+  probe.on("connect", () => {
+    probe.destroy();
+    res.status(409).json({ error: "端口 3080 已被占用（可能旧 dsh 实例还在运行）——请先停止旧实例，或在中控台把现有 dsh-web 停掉再试" });
   });
+  probe.on("error", () => {
+    state.serviceCategory["dsh-web"] = "AI 工具";
+    saveState();
+    pm2.start({
+      name: "dsh-web", script: process.execPath, args: [bin, "web"], cwd: DSH_WORKSPACE,
+      interpreter: "none", autorestart: true, max_restarts: 20, min_uptime: "2s", kill_timeout: 10000
+    }, (err) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ ok: true, message: "dsh-web 已拉入（分类：AI 工具）", note: "浏览器访问 http://127.0.0.1:3080" });
+    });
+  });
+  probe.setTimeout(3000, () => { probe.destroy(); res.status(500).json({ error: "端口探测超时" }); });
 });
 
 /* ---------- 启动 ---------- */
