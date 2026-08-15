@@ -4,7 +4,7 @@
  * 用法：electron.exe plugins/kb/standalone-main.js
  */
 import { app, BrowserWindow, shell, ipcMain } from "electron";
-import { spawn } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +13,18 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..", "..");
 const PORT = Number(process.env.CONSOLE_PORT || 3090);
 const HOST = process.env.CONSOLE_HOST || "127.0.0.1";
-const TOKEN = process.env.CONSOLE_TOKEN || "admin";
+
+/* 令牌解析：进程环境变量 → 用户级环境变量（注册表）→ 默认 admin */
+function resolveToken() {
+  if (process.env.CONSOLE_TOKEN && process.env.CONSOLE_TOKEN !== "admin") return process.env.CONSOLE_TOKEN;
+  try {
+    const v = execSync(`reg query "HKCU\\Environment" /v CONSOLE_TOKEN`, { encoding: "utf8", windowsHide: true, timeout: 3000 });
+    const m = /CONSOLE_TOKEN\s+REG_\w+\s+(.+)/.exec(v);
+    if (m && m[1] && m[1].trim() && m[1].trim() !== "admin") return m[1].trim();
+  } catch { /* 未设置用户级变量 */ }
+  return process.env.CONSOLE_TOKEN || "admin";
+}
+const TOKEN = resolveToken();
 const URL = `http://${HOST}:${PORT}/plugins/kb/standalone.html`;
 let serverProc = null;
 let spawnedByUs = false;

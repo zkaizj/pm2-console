@@ -18,7 +18,20 @@ const ROOT = path.resolve(__dirname, "..");
 const SERVER = path.join(ROOT, "server.js");
 const PORT = Number(process.env.CONSOLE_PORT || 3090);
 const HOST = process.env.CONSOLE_HOST || "127.0.0.1";
-const TOKEN = process.env.CONSOLE_TOKEN || "admin";
+
+/* 令牌解析：进程环境变量 → 用户级环境变量（注册表）→ 默认 admin
+ * 桌面版由 .cmd 启动，可能拿不到 PM2 进程里的 CONSOLE_TOKEN，需回退读取用户级变量 */
+function resolveToken() {
+  if (process.env.CONSOLE_TOKEN && process.env.CONSOLE_TOKEN !== "admin") return process.env.CONSOLE_TOKEN;
+  try {
+    const { execSync } = require("node:child_process");
+    const v = execSync(`reg query "HKCU\\Environment" /v CONSOLE_TOKEN`, { encoding: "utf8", windowsHide: true, timeout: 3000 });
+    const m = /CONSOLE_TOKEN\s+REG_\w+\s+(.+)/.exec(v);
+    if (m && m[1] && m[1].trim() && m[1].trim() !== "admin") return m[1].trim();
+  } catch { /* 未设置用户级变量 */ }
+  return process.env.CONSOLE_TOKEN || "admin";
+}
+const TOKEN = resolveToken();
 const URL = `http://${HOST}:${PORT}`;
 
 let serverProc = null;   // 本进程拉起的 server（若有）

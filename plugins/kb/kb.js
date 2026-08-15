@@ -39,6 +39,42 @@
     el._t = setTimeout(() => (el.style.display = "none"), 3000);
   }
 
+  /* 通用输入弹窗：优先用宿主的（index.html 的 askModal），否则内置简易版（standalone 用）
+   * 返回 Promise<string|null> —— Electron 渲染进程不支持 prompt，必须用 DOM 弹窗 */
+  function kbAsk(title, placeholder = "", defaultValue = "") {
+    if (typeof window.askModal === "function") return window.askModal(title, placeholder, defaultValue);
+    return new Promise((resolve) => {
+      let bg = $("kbAskBg");
+      if (!bg) {
+        bg = document.createElement("div");
+        bg.id = "kbAskBg";
+        bg.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:999";
+        bg.innerHTML = `<div style="background:#171e2e;border:1px solid #2a3550;border-radius:10px;padding:20px;width:440px;max-width:92vw">
+          <h3 id="kbAskTitle" style="font-size:15px;margin-bottom:12px;color:#e6ebf5"></h3>
+          <input id="kbAskInput" style="width:100%;background:#1d2740;border:1px solid #2a3550;color:#e6ebf5;border-radius:6px;padding:8px 10px;font-size:13px" autocomplete="off">
+          <div style="display:flex;gap:8px;margin-top:12px">
+            <button id="kbAskOk" style="background:#4f8cff;border:none;color:#fff;border-radius:6px;padding:6px 16px;cursor:pointer">确定</button>
+            <button id="kbAskCancel" style="background:#1d2740;border:1px solid #2a3550;color:#e6ebf5;border-radius:6px;padding:6px 16px;cursor:pointer">取消</button>
+          </div>
+        </div>`;
+        document.body.appendChild(bg);
+      }
+      $("kbAskTitle").textContent = title || "输入";
+      const inp = $("kbAskInput");
+      inp.value = defaultValue;
+      inp.placeholder = placeholder;
+      bg.style.display = "flex";
+      const cleanup = () => { bg.style.display = "none"; inp.onkeydown = null; };
+      inp.onkeydown = (e) => {
+        if (e.key === "Enter") { const v = inp.value.trim(); cleanup(); resolve(v || null); }
+        if (e.key === "Escape") { cleanup(); resolve(null); }
+      };
+      $("kbAskOk").onclick = () => { const v = inp.value.trim(); cleanup(); resolve(v || null); };
+      $("kbAskCancel").onclick = () => { cleanup(); resolve(null); };
+      setTimeout(() => inp.focus(), 50);
+    });
+  }
+
   let kbRoot = null;
   let kbTree = [];
   let currentFile = null;   // { path, name, rel }
@@ -202,7 +238,7 @@
 
   async function createEntry(isDir) {
     const dir = currentDir();
-    const name = prompt(isDir ? "输入新文件夹名称：" : "输入新 Markdown 文件名（.md）：", isDir ? "新建文件夹" : "未命名.md");
+    const name = await kbAsk(isDir ? "输入新文件夹名称：" : "输入新 Markdown 文件名（.md）：", isDir ? "新建文件夹" : "未命名.md", isDir ? "新建文件夹" : "未命名.md");
     if (!name) return;
     try {
       const d = await callApi("/api/kb/create", { method: "POST", body: { dir, name, isDir } });
@@ -249,7 +285,7 @@
   document.addEventListener("click", hideCtx);
 
   async function newAt(dir, isDir) {
-    const name = prompt(isDir ? "输入新文件夹名称：" : "输入新 Markdown 文件名（.md）：", isDir ? "新建文件夹" : "未命名.md");
+    const name = await kbAsk(isDir ? "输入新文件夹名称：" : "输入新 Markdown 文件名（.md）：", isDir ? "新建文件夹" : "未命名.md", isDir ? "新建文件夹" : "未命名.md");
     if (!name) return;
     try {
       const d = await callApi("/api/kb/create", { method: "POST", body: { dir, name, isDir } });
@@ -260,7 +296,7 @@
   }
   async function renameAt(path) {
     const oldName = path.split(/[\\/]/).pop();
-    const newName = prompt("输入新名称：", oldName);
+    const newName = await kbAsk("输入新名称：", oldName, oldName);
     if (!newName || newName === oldName) return;
     try {
       const d = await callApi("/api/kb/rename", { method: "POST", body: { path, name: newName } });
@@ -281,10 +317,7 @@
 
   /* ---------- 切换目录 ---------- */
   async function pickRoot() {
-    const input = prompt(
-      "输入知识库根目录（本地文件夹路径）：\n例如 D:\\ai\\dsh-workspace\\kb",
-      kbRoot
-    );
+    const input = await kbAsk("输入知识库根目录（本地文件夹路径）：", "例如 D:\\ai\\dsh-workspace\\kb", kbRoot);
     if (!input) return;
     try {
       const d = await callApi("/api/kb/root", { method: "POST", body: { root: input.trim() } });
@@ -311,11 +344,8 @@
       try {
         const d = await callApi(`/api/kb/search?q=${encodeURIComponent(q)}`);
         if (!d.hits.length) { toast("没有匹配内容"); return; }
-        const pick = prompt(
-          "搜索结果（输入序号打开）：\n\n" +
-          d.hits.slice(0, 20).map((h, i) => `${i + 1}. ${h.rel}${h.snippet ? " — " + h.snippet : ""}`).join("\n") +
-          (d.hits.length > 20 ? `\n… 共 ${d.hits.length} 条` : "")
-        );
+        const list = d.hits.slice(0, 20).map((h, i) => `${i + 1}. ${h.rel}${h.snippet ? " — " + h.snippet : ""}`).join("\n");
+        const pick = await kbAsk("搜索结果（输入序号打开）：", list + (d.hits.length > 20 ? `\n… 共 ${d.hits.length} 条` : ""), "");
         const idx = Number(pick) - 1;
         if (pick !== null && !isNaN(idx) && d.hits[idx]) {
           const dirPart = d.hits[idx].path.split(/[\\/]/).slice(0, -1).join("/");

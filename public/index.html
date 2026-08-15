@@ -285,6 +285,18 @@
 
 <div class="toast" id="toast"></div>
 
+<div class="modal-bg" id="tokenModalBg">
+  <div class="modal" style="width:460px">
+    <h3 id="tokenModalTitle">🔑 输入中控台令牌</h3>
+    <div class="hint" style="margin-bottom:8px">令牌即服务端环境变量 <b class="mono">CONSOLE_TOKEN</b> 的值。浏览器中保存在本机 localStorage，无需重复输入。</div>
+    <input type="password" id="tokenInput" placeholder="粘贴令牌…" autocomplete="off">
+    <div class="row" style="margin-top:12px">
+      <button class="primary small" id="btnTokenOk">确定</button>
+      <button class="small" id="btnTokenCancel">取消</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-bg" id="pluginModalBg">
   <div class="modal" style="width:560px">
     <h3>🧩 插件管理</h3>
@@ -299,15 +311,42 @@ const $ = (id) => document.getElementById(id);
 let TOKEN = localStorage.getItem("consoleToken") || "";
 let CATS = [], FILTER = "全部", monitor = null, hist = {}, currentLogName = null;
 
+/* 通用输入弹窗（替代 prompt —— Electron 渲染进程不支持 prompt）
+ * 返回 Promise<string|null>；取消/关闭返回 null */
+function askModal(title, placeholder = "", defaultValue = "") {
+  return new Promise((resolve) => {
+    const bg = $("tokenModalBg");
+    $("tokenModalTitle").textContent = title || "输入";
+    const inp = $("tokenInput");
+    inp.value = defaultValue;
+    inp.placeholder = placeholder;
+    bg.style.display = "flex";
+    const cleanup = () => { bg.style.display = "none"; inp.onkeydown = null; };
+    inp.onkeydown = (e) => {
+      if (e.key === "Enter") { const v = inp.value.trim(); cleanup(); resolve(v || null); }
+      if (e.key === "Escape") { cleanup(); resolve(null); }
+    };
+    $("btnTokenOk").onclick = () => { const v = inp.value.trim(); cleanup(); resolve(v || null); };
+    $("btnTokenCancel").onclick = () => { cleanup(); resolve(null); };
+    setTimeout(() => inp.focus(), 50);
+  });
+}
+
 async function api(path, opts = {}) {
   const headers = Object.assign({ "X-Console-Token": TOKEN }, opts.headers || {});
   if (opts.body) headers["Content-Type"] = "application/json";
   const res = await fetch(path, { method: opts.method || "GET", headers, body: opts.body ? JSON.stringify(opts.body) : undefined });
   if (res.status === 401) {
-    showBanner("令牌无效或未设置 —— 请在下方弹窗中输入正确令牌（服务端 CONSOLE_TOKEN）");
-    const t = prompt("请输入中控台令牌（服务端 CONSOLE_TOKEN）:");
-    if (t === null) throw new Error("未授权：令牌无效");
+    showBanner("令牌无效或未设置 —— 请在下框中输入正确令牌（服务端 CONSOLE_TOKEN）");
+    // 桌面版：尝试自动注入令牌，再弹窗让用户录入
+    let t = null;
+    if (window.desktopEnv && window.desktopEnv.getToken) {
+      try { const injected = await window.desktopEnv.getToken(); if (injected && injected !== "admin") t = injected; } catch { /* 忽略 */ }
+    }
+    if (!t) t = await askModal("🔑 输入中控台令牌", "粘贴服务端 CONSOLE_TOKEN…", TOKEN);
+    if (t === null || t === "") throw new Error("未授权：令牌无效");
     TOKEN = t; localStorage.setItem("consoleToken", t);
+    $("errBanner").style.display = "none";
     return api(path, opts);
   }
   const data = await res.json().catch(() => ({}));
@@ -371,7 +410,7 @@ $("inTemplate").onchange = () => {
 };
 $("inCategory").onchange = async () => {
   if ($("inCategory").value === "__new__") {
-    const n = prompt("新分类名称：");
+    const n = await askModal("新分类名称：", "输入分类名称…", "");
     if (n && n.trim()) { await api("/api/categories", { method: "POST", body: { name: n.trim() } }); await loadCats(); }
     else $("inCategory").value = "未分类";
   }
@@ -392,7 +431,7 @@ function renderCatModal() {
     </div>`).join("") + `<div class="item muted" style="border:none">未分类为内置分类，不可管理</div>`;
 }
 async function renameCat(old) {
-  const n = prompt(`重命名分类「${old}」为：`, old);
+  const n = await askModal(`重命名分类「${old}」为：`, "输入新分类名称…", old);
   if (n && n.trim() && n.trim() !== old) {
     try { await api(`/api/categories/${encodeURIComponent(old)}`, { method: "PATCH", body: { name: n.trim() } }); await loadCats(); await loadList(); toast("已重命名"); }
     catch (e) { toast(e.message, true); }
@@ -576,9 +615,9 @@ async function importProc(pid, stopOriginal) {
   const p = DISCOVER.find((x) => x.pid === pid);
   if (!p) return toast("进程已不在列表，请重新扫描", true);
   const suggested = p.name.replace(/\.exe$/i, "");
-  const name = prompt(`拉入为服务（名称，默认 ${suggested}）：`, suggested);
+  const name = await askModal(`拉入为服务（名称，默认 ${suggested}）：`, suggested, suggested);
   if (name === null) return;
-  const category = prompt("归入分类（留空为未分类）：", "") || "";
+  const category = (await askModal("归入分类（留空为未分类）：", "未分类", "")) || "";
   try {
     const r = await api(`/api/discover/${pid}/import`, { method: "POST", body: { name: name.trim() || undefined, category, stopOriginal: !!stopOriginal } });
     toast(r.message || "已拉入 " + name);
