@@ -402,6 +402,15 @@ function killProcess(pid) {
   });
 }
 
+// 关闭扫描到的进程（先优雅后强杀）
+app.post("/api/discover/:pid/kill", async (req, res) => {
+  try {
+    const pid = Number(req.params.pid);
+    const stopped = await killProcess(pid);
+    res.json({ ok: true, pid, stopped });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // 把检测到的进程"拉入" pm2 托管: { name?, category?, stopOriginal?, cwd? }
 app.post("/api/discover/:pid/import", async (req, res) => {
   try {

@@ -481,6 +481,7 @@ function renderDiscover() {
       <td><div class="actions">
         <button class="small" onclick="importProc(${p.pid}, false)">➕ 拉入</button>
         <button class="small" onclick="importProc(${p.pid}, true)">➕ 拉入并停原</button>
+        <button class="small danger" onclick="killProc(${p.pid}, '${esc(p.name)}')">⛔ 关闭</button>
       </div></td>
     </tr>`).join("");
 }
@@ -495,6 +496,14 @@ async function importProc(pid, stopOriginal) {
     const r = await api(`/api/discover/${pid}/import`, { method: "POST", body: { name: name.trim() || undefined, category, stopOriginal: !!stopOriginal } });
     toast(r.message || "已拉入 " + name);
     setTimeout(() => { scanDiscover(); loadList(); }, 1000);
+  } catch (e) { toast(e.message, true); }
+}
+async function killProc(pid, name) {
+  if (!confirm(`确定要关闭进程「${name}」(PID ${pid}) 吗？\n该进程不是 pm2 托管的，关闭后需要手动重新启动。`)) return;
+  try {
+    const r = await api(`/api/discover/${pid}/kill`, { method: "POST" });
+    toast(r.stopped ? `已关闭 ${name}` : `关闭 ${name} 失败（可能无权限或已退出）`, !r.stopped);
+    setTimeout(scanDiscover, 800);
   } catch (e) { toast(e.message, true); }
 }
 $("btnScan").onclick = scanDiscover;
