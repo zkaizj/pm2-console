@@ -579,7 +579,11 @@ async function loadProjects() {
     const d = await api("/api/projects");
     PROJECTS = d.projects || [];
     renderProjects();
-  } catch (e) { /* 静默 */ }
+  } catch (e) {
+    const el = $("projList");
+    if (el) el.innerHTML = `<div class="empty" style="color:var(--red)">项目加载失败：${esc(e.message)}</div>`;
+    showBanner("项目加载失败：" + e.message);
+  }
 }
 function renderProjects() {
   const el = $("projList");
