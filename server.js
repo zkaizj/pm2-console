@@ -29,14 +29,14 @@ const STATE_FILE = path.join(STATE_DIR, "state.json");
 const DEFAULT_CATEGORIES = ["AI 工具", "Web 服务", "Java 应用", "数据库", "工具"];
 
 /* ---------- 分类状态（持久化） ---------- */
-let state = { categories: [...DEFAULT_CATEGORIES], serviceCategory: {}, serviceMeta: {}, settings: { webhookUrl: "", webhookType: "generic", alertEnabled: false, alertCooldownMin: 5 } };
+let state = { categories: [...DEFAULT_CATEGORIES], serviceCategory: {}, serviceMeta: {}, settings: { webhookUrl: "", webhookType: "generic", alertEnabled: false, alertCooldownMin: 5, healthCheckEnabled: true } };
 function loadState() {
   try {
     const raw = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
     state.categories = Array.isArray(raw.categories) ? raw.categories : [...DEFAULT_CATEGORIES];
     state.serviceCategory = raw.serviceCategory && typeof raw.serviceCategory === "object" ? raw.serviceCategory : {};
     state.serviceMeta = raw.serviceMeta && typeof raw.serviceMeta === "object" ? raw.serviceMeta : {};
-    state.settings = Object.assign({ webhookUrl: "", webhookType: "generic", alertEnabled: false, alertCooldownMin: 5 }, raw.settings || {});
+    state.settings = Object.assign({ webhookUrl: "", webhookType: "generic", alertEnabled: false, alertCooldownMin: 5, healthCheckEnabled: true }, raw.settings || {});
   } catch { /* 首次运行或文件损坏，用默认 */ }
 }
 function saveState() {
@@ -319,25 +319,28 @@ async function healthSweep() {
   pm2.list((err, list) => {
     if (err) return;
     const procs = list || [];
-    // pm2 状态异常告警
-    procs.forEach((p) => {
-      const name = p.name;
-      const st = p.pm2_env ? p.pm2_env.status : p.status;
-      const prev = prevPm2Status[name];
-      if (prev === "online" && st === "errored" && alertThrottled("pm2:" + name)) sendAlert(`⚠️ PM2 服务异常：${name} 从运行中变为异常状态`);
-      prevPm2Status[name] = st;
-    });
-    // 健康检查
+    // pm2 状态异常告警（不受健康检查开关影响）
+    if (state.settings.alertEnabled) {
+      procs.forEach((p) => {
+        const name = p.name;
+        const st = p.pm2_env ? p.pm2_env.status : p.status;
+        const prev = prevPm2Status[name];
+        if (prev === "online" && st === "errored" && alertThrottled("pm2:" + name)) sendAlert(`⚠️ PM2 服务异常：${name} 从运行中变为异常状态`);
+        prevPm2Status[name] = st;
+      });
+    }
+    // 健康检查（可开关）
+    if (!state.settings.healthCheckEnabled) return;
     procs.forEach((p) => {
       const name = p.name;
       const meta = state.serviceMeta[name] || {};
       if (!meta.healthUrl) return;
       probeUrl(meta.healthUrl).then((r) => {
         const ok = r.ok && (!meta.healthKeyword || (r.body || "").includes(meta.healthKeyword));
-        healthCache[name] = { ok, latencyMs: r.latencyMs, status: r.status, checkedAt: new Date().toISOString() };
         const prev = healthCache[name];
+        healthCache[name] = { ok, latencyMs: r.latencyMs, status: r.status, checkedAt: new Date().toISOString() };
         const wasOk = prev === undefined ? true : prev.ok;
-        if (!ok && wasOk && alertThrottled("health:" + name)) sendAlert(`🚨 健康检查失败：${name}（${meta.healthUrl}）`);
+        if (!ok && wasOk && state.settings.alertEnabled && alertThrottled("health:" + name)) sendAlert(`🚨 健康检查失败：${name}（${meta.healthUrl}）`);
       });
     });
   });
@@ -348,9 +351,10 @@ setTimeout(healthSweep, 3000);
 app.get("/api/settings", (req, res) => res.json({ settings: state.settings }));
 app.post("/api/settings", (req, res) => {
   const b = req.body || {};
-  ["webhookUrl", "webhookType", "alertEnabled", "alertCooldownMin"].forEach((k) => { if (b[k] !== undefined) state.settings[k] = b[k]; });
+  ["webhookUrl", "webhookType", "alertEnabled", "alertCooldownMin", "healthCheckEnabled"].forEach((k) => { if (b[k] !== undefined) state.settings[k] = b[k]; });
   state.settings.webhookUrl = String(state.settings.webhookUrl || "").trim();
   state.settings.alertEnabled = !!state.settings.alertEnabled;
+  state.settings.healthCheckEnabled = !!state.settings.healthCheckEnabled;
   saveState();
   res.json({ ok: true, settings: state.settings });
 });
@@ -362,11 +366,11 @@ app.get("/api/health", (req, res) => {
         name: p.name,
         status: p.pm2_env ? p.pm2_env.status : p.status,
         webUrl: (state.serviceMeta[p.name] || {}).webUrl || null,
-        health: healthCache[p.name] || null,
+        health: state.settings.healthCheckEnabled ? (healthCache[p.name] || null) : null,
         hasHealth: !!(state.serviceMeta[p.name] || {}).healthUrl
       }));
-      const summary = { total: services.length, online: services.filter((s) => s.status === "online").length, unhealthy: services.filter((s) => s.hasHealth && s.health && !s.health.ok).length };
-      res.json({ summary, services });
+      const summary = { total: services.length, online: services.filter((s) => s.status === "online").length, unhealthy: state.settings.healthCheckEnabled ? services.filter((s) => s.hasHealth && s.health && !s.health.ok).length : 0 };
+      res.json({ enabled: state.settings.healthCheckEnabled, summary, services });
     });
   });
 });

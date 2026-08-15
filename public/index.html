@@ -242,6 +242,7 @@
     <input type="text" id="alWebhook" placeholder="Webhook 地址（企业微信/钉钉/飞书机器人 URL）">
     <select id="alType"><option value="generic">企业微信 / 钉钉</option><option value="feishu">飞书</option></select>
     <div class="row" style="margin-bottom:8px"><label style="margin:0">启用告警</label><input type="checkbox" id="alEnabled" style="width:auto;flex:0 0 auto"></div>
+    <div class="row" style="margin-bottom:8px"><label style="margin:0">启用健康巡检（20 秒一次）</label><input type="checkbox" id="alHealth" style="width:auto;flex:0 0 auto"></div>
     <input type="text" id="alCooldown" placeholder="冷却时间（分钟，默认 5，防刷屏）">
     <div class="hint">触发条件：① 服务状态异常（运行中 → 异常）② 健康检查失败（需在服务 ⚙️ 里配置健康检查地址）。</div>
     <div class="row" style="margin-top:10px"><button class="primary small" id="btnSaveAlerts">保存</button><button class="small" id="btnCloseAlerts">关闭</button></div>
@@ -758,6 +759,11 @@ async function loadHealth() {
     const d = await api("/api/health");
     HEALTH = d;
     const s = d.summary;
+    if (d.enabled === false) {
+      $("ovInfo").textContent = "健康检查已关闭";
+      $("ovBody").innerHTML = `<div class="empty">健康检查已关闭 —— 需要时点右上角「🔔 告警设置」勾选「启用健康巡检」。</div>`;
+      return;
+    }
     $("ovInfo").textContent = `共 ${s.total} · 在线 ${s.online} · 健康异常 ${s.unhealthy}`;
     if (!d.services.length) { $("ovBody").innerHTML = '<div class="empty">暂无服务</div>'; return; }
     $("ovBody").innerHTML = `<table><thead><tr><th>服务</th><th>PM2 状态</th><th>健康检查</th><th>延迟</th><th>页面</th></tr></thead><tbody>`
@@ -800,6 +806,7 @@ async function loadSettingsUI() {
     $("alWebhook").value = s.webhookUrl || "";
     $("alType").value = s.webhookType || "generic";
     $("alEnabled").checked = !!s.alertEnabled;
+    $("alHealth").checked = s.healthCheckEnabled !== false;
     $("alCooldown").value = s.alertCooldownMin || 5;
   } catch (e) { /* 静默 */ }
 }
@@ -809,7 +816,8 @@ $("btnSaveAlerts").onclick = async () => {
   try {
     await api("/api/settings", { method: "POST", body: {
       webhookUrl: $("alWebhook").value.trim(), webhookType: $("alType").value,
-      alertEnabled: $("alEnabled").checked, alertCooldownMin: Number($("alCooldown").value) || 5
+      alertEnabled: $("alEnabled").checked, alertCooldownMin: Number($("alCooldown").value) || 5,
+      healthCheckEnabled: $("alHealth").checked
     } });
     $("alertModalBg").style.display = "none";
     toast("告警设置已保存");
