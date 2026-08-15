@@ -18,7 +18,11 @@
   每个进程有监控面板：近 90 秒 **CPU / 内存趋势曲线** + **实时日志尾部**
 - **一键掌控**：启动 / 停止 / 重启 / 删除，全部网页上完成
 - **项目管理（P0）**：登记开发项目（git 地址/目录/框架/安装/构建命令）→ 一键部署流水线
-  （git 检查 → pull → 装依赖 → 构建 → 重启服务）→ 发布历史 → 一键回滚到上次成功版本
+  （git 检查 → pull → 装依赖 → 构建 → 重启服务）→ 发布历史 → 一键回滚到上次成功版本；
+  **部署后自动健康探活，失败自动回滚**
+- **健康检查 + 服务总览**：给服务配置探活地址，一屏看所有服务健康状态与延迟
+- **日志搜索**：跨全部服务日志按关键字搜索（每文件最近 1MB）
+- **Webhook 告警**：服务状态异常 / 健康检查失败 → 推送企业微信 / 钉钉 / 飞书（带冷却防刷屏）
 - **进程发现与拉入**：扫描本机正在运行的非系统进程，一键把任意程序"拉入" pm2 托管
   （自动读取启动命令重建托管，可选"拉入并停原进程"避免端口冲突）
 - **DSH 预设**：一键拉入 `dsh-web`（DeepSeek Harness Web）
@@ -132,6 +136,10 @@ schtasks /Create /SC ONLOGON /TN "pm2-resurrect" /TR "D:\path\to\pm2-resurrect.c
 | POST | `/api/processes/:id/action` | `{action: start\|stop\|restart\|delete}` |
 | POST | `/api/processes/:id/category` | 修改服务分类 `{category}` |
 | GET | `/api/processes/:id/logs?lines=200` | 日志尾部 |
+| POST | `/api/processes/:id/meta` | 设置备注/页面/健康检查 `{webUrl?, remark?, healthUrl?, healthKeyword?}` |
+| GET | `/api/health` | 服务总览（健康状态缓存，20 秒巡检） |
+| GET | `/api/logs/search?q=&service=` | 日志关键字搜索 |
+| GET/POST | `/api/settings` | 告警设置（webhookUrl / webhookType / alertEnabled / alertCooldownMin） |
 | GET | `/api/discover` | 扫描本机非系统进程（排除已托管） |
 | POST | `/api/discover/:pid/import` | 拉入进程 `{name?, category?, stopOriginal?, cwd?}` |
 | GET | `/api/projects` | 项目列表（含关联服务状态） |
