@@ -66,6 +66,19 @@
   .modal h3{font-size:15px;margin-bottom:14px}
   .modal .item{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)}
   .modal .item .name{flex:1}
+  .proj-card{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px}
+  .proj-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .proj-meta{font-size:12px;margin-top:6px;word-break:break-all}
+  .proj-desc{font-size:12px;margin-top:4px}
+  .proj-history{margin-top:8px;font-size:12px}
+  .hist-item{padding:2px 0;border-bottom:1px dashed var(--border)}
+  .hist-item.ok{color:var(--green)}
+  .hist-item.bad{color:var(--red)}
+  .dep-step{padding:3px 0;font-size:13px}
+  .dep-step.running{color:var(--yellow)}
+  .dep-step.done{color:var(--green)}
+  .dep-step.fail{color:var(--red)}
+  #projModalBg .modal input,#projModalBg .modal select{width:100%;margin-bottom:8px}
 </style>
 </head>
 <body>
@@ -124,6 +137,11 @@
 </div>
 
 <div class="card">
+  <h2>📦 项目管理 <button class="small" id="btnNewProject" style="float:right">➕ 新建项目</button></h2>
+  <div id="projList"><div class="empty">加载中…</div></div>
+</div>
+
+<div class="card">
   <h2>📋 托管中的服务 <span class="muted" id="countInfo"></span></h2>
   <div class="table-wrap">
     <table>
@@ -164,6 +182,32 @@
       <button class="primary small" id="btnNewCat">添加</button>
       <button class="small" id="btnCloseCat">关闭</button>
     </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="projModalBg">
+  <div class="modal" style="width:540px">
+    <h3 id="projModalTitle">新建项目</h3>
+    <input type="text" id="pjName" placeholder="项目名称 *（如 my-blog）">
+    <input type="text" id="pjGitUrl" placeholder="Git 地址（可留空，如 git@gitee.com:user/repo.git）">
+    <input type="text" id="pjRepoDir" placeholder="本地项目目录 *（如 D:\projects\my-blog）">
+    <select id="pjFramework">
+      <option value="node">Node.js</option><option value="java">Java</option><option value="python">Python</option><option value="other">其他</option>
+    </select>
+    <input type="text" id="pjInstallCmd" placeholder="安装依赖命令（如 npm install --no-audit）">
+    <input type="text" id="pjBuildCmd" placeholder="构建命令（可选，如 npm run build / mvn package）">
+    <input type="text" id="pjRestartService" placeholder="关联的服务名（pm2 里托管的名称，部署后自动重启；可留空）">
+    <input type="text" id="pjDesc" placeholder="描述（可选）">
+    <div class="row"><button class="primary small" id="btnSaveProject">保存</button><button class="small" id="btnCloseProj">关闭</button></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="depModalBg">
+  <div class="modal" style="width:660px">
+    <h3>🚀 部署进度：<span id="depTitle"></span></h3>
+    <div id="depSteps"></div>
+    <pre id="depLog" style="max-height:320px;overflow:auto;white-space:pre-wrap;word-break:break-all;font-size:12px"></pre>
+    <div class="row" style="margin-top:10px"><button class="small" id="btnCloseDep">关闭</button></div>
   </div>
 </div>
 
@@ -426,6 +470,107 @@ $("btnScan").onclick = scanDiscover;
 $("btnClearDisc").onclick = () => { DISCOVER = []; $("inDiscoverFilter").value = ""; renderDiscover(); $("discoverInfo").textContent = ""; };
 $("inDiscoverFilter").oninput = renderDiscover;
 
+/* ---------- 项目管理 ---------- */
+let PROJECTS = [], editingProj = null, depTimer = null;
+async function loadProjects() {
+  try {
+    const d = await api("/api/projects");
+    PROJECTS = d.projects || [];
+    renderProjects();
+  } catch (e) { /* 静默 */ }
+}
+function renderProjects() {
+  const el = $("projList");
+  if (!PROJECTS.length) { el.innerHTML = '<div class="empty">还没有项目，点「➕ 新建项目」把开发项目登记进来（登记后可一键部署 / 回滚）</div>'; return; }
+  el.innerHTML = PROJECTS.map((p) => `
+    <div class="proj-card">
+      <div class="proj-head">
+        <b>${esc(p.name)}</b>
+        <span class="muted">[${esc(p.framework || "node")}]</span>
+        ${p.serviceStatus ? `<span class="status ${statusClass(p.serviceStatus.status)}"><i></i>${SZH[p.serviceStatus.status] || p.serviceStatus.status}</span>` : ""}
+        <span class="spacer"></span>
+        <button class="small" onclick="startDeploy('${esc(p.id)}','deploy')">🚀 部署</button>
+        <button class="small" onclick="startDeploy('${esc(p.id)}','rollback')">↩️ 回滚</button>
+        <button class="small" onclick="editProject('${esc(p.id)}')">✎ 编辑</button>
+        <button class="small danger" onclick="delProject('${esc(p.id)}')">🗑</button>
+      </div>
+      <div class="proj-meta muted mono">${esc(shortPath(p.repoDir))}${p.gitUrl ? " · " + esc(shortPath(p.gitUrl)) : ""}${p.restartService ? " · 服务:" + esc(p.restartService) : ""}</div>
+      ${p.description ? `<div class="proj-desc muted">${esc(p.description)}</div>` : ""}
+      <div class="proj-history">
+        ${(p.deployHistory || []).slice(0, 5).map((h) => `
+          <div class="hist-item ${h.result === "ok" ? "ok" : "bad"}">${h.kind === "rollback" ? "↩️ 回滚" : "🚀 部署"} ${new Date(h.at).toLocaleString()} ${h.commit ? `<span class="mono">${esc(String(h.commit).slice(0, 8))}</span>` : ""} ${esc(h.msg || "")} ${h.result === "ok" ? "✓" : "✗"}</div>`).join("") || '<div class="muted">暂无发布记录</div>'}
+      </div>
+    </div>`).join("");
+}
+$("btnNewProject").onclick = () => {
+  editingProj = null; $("projModalTitle").textContent = "新建项目";
+  ["pjName", "pjGitUrl", "pjRepoDir", "pjInstallCmd", "pjBuildCmd", "pjRestartService", "pjDesc"].forEach((i) => $(i).value = "");
+  $("pjFramework").value = "node";
+  $("projModalBg").style.display = "flex";
+};
+function editProject(id) {
+  const p = PROJECTS.find((x) => x.id === id); if (!p) return;
+  editingProj = p; $("projModalTitle").textContent = "编辑项目：" + p.name;
+  $("pjName").value = p.name; $("pjGitUrl").value = p.gitUrl || ""; $("pjRepoDir").value = p.repoDir;
+  $("pjFramework").value = p.framework || "node"; $("pjInstallCmd").value = p.installCmd || "";
+  $("pjBuildCmd").value = p.buildCmd || ""; $("pjRestartService").value = p.restartService || "";
+  $("pjDesc").value = p.description || "";
+  $("projModalBg").style.display = "flex";
+}
+$("btnSaveProject").onclick = async () => {
+  const body = {
+    name: $("pjName").value.trim(), gitUrl: $("pjGitUrl").value.trim(), repoDir: $("pjRepoDir").value.trim(),
+    framework: $("pjFramework").value, installCmd: $("pjInstallCmd").value.trim(), buildCmd: $("pjBuildCmd").value.trim(),
+    restartService: $("pjRestartService").value.trim(), description: $("pjDesc").value.trim()
+  };
+  if (!body.name || !body.repoDir) return toast("项目名称和目录必填", true);
+  try {
+    if (editingProj) await api("/api/projects/" + editingProj.id, { method: "PATCH", body });
+    else await api("/api/projects", { method: "POST", body });
+    $("projModalBg").style.display = "none";
+    await loadProjects(); toast("已保存");
+  } catch (e) { toast(e.message, true); }
+};
+$("btnCloseProj").onclick = () => { $("projModalBg").style.display = "none"; };
+async function delProject(id) {
+  if (!confirm("删除项目档案？（不影响已托管的服务）")) return;
+  try { await api("/api/projects/" + id, { method: "DELETE" }); await loadProjects(); toast("已删除"); }
+  catch (e) { toast(e.message, true); }
+}
+async function startDeploy(id, kind) {
+  const p = PROJECTS.find((x) => x.id === id); if (!p) return;
+  $("depTitle").textContent = `${p.name} - ${kind === "rollback" ? "回滚到上次成功版本" : "部署最新代码"}`;
+  $("depSteps").innerHTML = '<div class="muted">准备中…</div>';
+  $("depLog").textContent = "";
+  $("depModalBg").style.display = "flex";
+  try {
+    const r = await api(`/api/projects/${id}/${kind === "rollback" ? "rollback" : "deploy"}`, { method: "POST" });
+    pollDeploy(r.deployId, id);
+  } catch (e) { toast(e.message, true); $("depModalBg").style.display = "none"; }
+}
+function pollDeploy(depId, projectId) {
+  clearInterval(depTimer);
+  const tick = async () => {
+    try {
+      const d = await api(`/api/projects/${projectId}/deploys/${depId}`);
+      $("depSteps").innerHTML = d.steps.map((s) => `<div class="dep-step ${s.state}">${s.state === "running" ? "⏳" : s.state === "done" ? "✅" : "❌"} ${esc(s.name)}</div>`).join("");
+      $("depLog").textContent = d.steps.map((s) => `▶ ${s.name}\n${s.output || ""}`).join("\n");
+      $("depLog").scrollTop = $("depLog").scrollHeight;
+      if (d.status !== "running") {
+        clearInterval(depTimer); depTimer = null;
+        toast(d.status === "ok" ? "✅ 部署成功" : "❌ 部署失败：" + (d.errorStep || ""));
+        loadProjects(); loadList();
+      }
+    } catch (e) {
+      clearInterval(depTimer); depTimer = null;
+      $("depSteps").innerHTML = `<div class="muted">${esc(e.message)}</div>`;
+    }
+  };
+  tick();
+  depTimer = setInterval(tick, 1500);
+}
+$("btnCloseDep").onclick = () => { $("depModalBg").style.display = "none"; clearInterval(depTimer); depTimer = null; };
+
 /* ---------- 启动 ---------- */
 async function init() {
   try {
@@ -435,6 +580,7 @@ async function init() {
   $("inTemplate").onchange();
   await loadCats();
   await loadList();
+  await loadProjects();
   setInterval(loadList, 3000);
 }
 init();

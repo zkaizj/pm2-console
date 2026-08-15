@@ -314,7 +314,7 @@ app.post("/api/presets/dsh", (req, res) => {
 });
 
 /* ---------- 进程发现与拉入 ---------- */
-const { execFile, spawnSync } = require("child_process");
+const { execFile, spawnSync, spawn } = require("child_process");
 
 /** 用 PowerShell CIM 查询进程（windowsHide 避免弹窗；本服务被 pm2 隐藏运行时子进程必须隐藏） */
 function queryProcessesJson(pidFilter) {
@@ -405,6 +405,184 @@ app.post("/api/discover/:pid/import", async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+/* ---------- 项目管理（项目档案 / 一键部署 / 发布历史与回滚） ---------- */
+const PROJECTS_FILE = path.join(STATE_DIR, "projects.json");
+let projects = [];
+function loadProjects() {
+  try { projects = JSON.parse(fs.readFileSync(PROJECTS_FILE, "utf8")); if (!Array.isArray(projects)) projects = []; }
+  catch { projects = []; }
+}
+function saveProjects() {
+  try { fs.mkdirSync(STATE_DIR, { recursive: true }); fs.writeFileSync(PROJECTS_FILE, JSON.stringify(projects, null, 2), "utf8"); }
+  catch (e) { console.error("[pm2-console] 保存项目失败:", e.message); }
+}
+loadProjects();
+
+const DEPLOYS = new Map();   // deployId -> 部署运行记录
+let deploySeq = 0;
+
+/** 执行命令并完整捕获输出（用于检查类命令） */
+function captureCommand(cmdStr, cwd) {
+  return new Promise((resolve) => {
+    let out = "";
+    try {
+      const tokens = tokenizeCommand(cmdStr);
+      if (!tokens.length) return resolve({ ok: true, code: 0, output: "" });
+      let exe = tokens[0], args = tokens.slice(1);
+      const resolved = findOnPath(exe);
+      if (!resolved) return resolve({ ok: false, code: -1, output: `找不到可执行文件: ${exe}\n` });
+      const ext = path.extname(resolved).toLowerCase();
+      if (ext === ".cmd" || ext === ".bat") { exe = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "cmd.exe"); args = ["/c", resolved, ...args]; }
+      else if (ext === ".ps1") { exe = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"); args = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", resolved, ...args]; }
+      else exe = resolved;
+      const child = spawn(exe, args, { cwd, windowsHide: true, env: Object.assign({}, process.env) });
+      child.stdout && child.stdout.on("data", (d) => { out += String(d); });
+      child.stderr && child.stderr.on("data", (d) => { out += String(d); });
+      child.on("error", (e) => resolve({ ok: false, code: -1, output: out + "启动失败: " + e.message }));
+      child.on("close", (code) => resolve({ ok: code === 0, code, output: out }));
+    } catch (e) { resolve({ ok: false, code: -1, output: String(e.message) }); }
+  });
+}
+
+/** 执行一条流水线步骤，输出流式写入该步骤（用于安装/构建等耗时命令） */
+function runCommandInto(stepName, cmdStr, cwd, steps) {
+  return new Promise((resolve) => {
+    const step = { name: stepName, state: "running", output: "" };
+    steps.push(step);
+    const push = (d) => { if (d) step.output += String(d); };
+    let tokens;
+    try { tokens = tokenizeCommand(cmdStr); } catch (e) { push("命令解析失败: " + e.message + "\n"); step.state = "fail"; return resolve({ ok: false, code: -1 }); }
+    if (!tokens.length) { step.state = "done"; return resolve({ ok: true, code: 0 }); }
+    let exe = tokens[0], args = tokens.slice(1);
+    const resolved = findOnPath(exe);
+    if (!resolved) { push(`找不到可执行文件: ${exe}\n`); step.state = "fail"; return resolve({ ok: false, code: -1 }); }
+    const ext = path.extname(resolved).toLowerCase();
+    if (ext === ".cmd" || ext === ".bat") { exe = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "cmd.exe"); args = ["/c", resolved, ...args]; }
+    else if (ext === ".ps1") { exe = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"); args = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", resolved, ...args]; }
+    else exe = resolved;
+    const child = spawn(exe, args, { cwd, windowsHide: true, env: Object.assign({}, process.env) });
+    child.stdout && child.stdout.on("data", push);
+    child.stderr && child.stderr.on("data", push);
+    child.on("error", (e) => { push("启动失败: " + e.message + "\n"); step.state = "fail"; resolve({ ok: false, code: -1 }); });
+    child.on("close", (code) => {
+      step.state = code === 0 ? "done" : "fail";
+      if (code !== 0) push(`[退出码 ${code}]\n`);
+      resolve({ ok: code === 0, code });
+    });
+  });
+}
+
+function restartService(name) {
+  return new Promise((resolve) => {
+    pm2.restart(name, (err) => resolve(err ? { ok: false, msg: err.message } : { ok: true, msg: "" }));
+  });
+}
+
+/** 运行部署/回滚流水线 */
+async function runPipeline(project, kind) {
+  const dep = { id: "dep-" + (++deploySeq) + "-" + Date.now().toString(36), projectId: project.id, kind, status: "running", steps: [], startedAt: new Date().toISOString(), commit: null, commitMsg: null, errorStep: null, finishedAt: null };
+  DEPLOYS.set(dep.id, dep);
+  if (DEPLOYS.size > 100) { const first = DEPLOYS.keys().next().value; DEPLOYS.delete(first); }
+  const repo = project.repoDir;
+  const finish = (status, errorStep) => { dep.status = status; dep.finishedAt = new Date().toISOString(); dep.errorStep = errorStep; };
+  try {
+    const isGit = await captureCommand(`git -C "${repo}" rev-parse --is-inside-work-tree`, repo);
+    if (!isGit.ok || String(isGit.output).trim() !== "true") { const s = { name: "git 检查", state: "fail", output: isGit.output || "不是 git 仓库" }; dep.steps.push(s); return finish("fail", "git 检查"), dep; }
+    const dirty = await captureCommand(`git -C "${repo}" status --porcelain`, repo);
+    if (dirty.ok && String(dirty.output).trim().length) { const s = { name: "工作区检查", state: "fail", output: "工作区有未提交改动，请先提交或清理：\n" + dirty.output }; dep.steps.push(s); return finish("fail", "工作区检查"), dep; }
+    if (kind === "deploy") {
+      const pull = await runCommandInto("git pull", `git -C "${repo}" pull`, repo, dep.steps);
+      if (!pull.ok) return finish("fail", "git pull"), dep;
+    } else {
+      const good = project.lastGoodCommit;
+      if (!good) { const s = { name: "回滚", state: "fail", output: "没有可回滚的版本（尚无成功部署记录）" }; dep.steps.push(s); return finish("fail", "回滚"), dep; }
+      const rs = await runCommandInto("git reset 到上次成功版本", `git -C "${repo}" reset --hard ${good}`, repo, dep.steps);
+      if (!rs.ok) return finish("fail", "git reset"), dep;
+    }
+    const head = await captureCommand(`git -C "${repo}" rev-parse HEAD`, repo);
+    const msg = await captureCommand(`git -C "${repo}" log -1 --format=%s`, repo);
+    dep.commit = head.ok ? String(head.output).trim() : null;
+    dep.commitMsg = msg.ok ? String(msg.output).trim() : null;
+    if (project.installCmd) { const i = await runCommandInto("安装依赖", project.installCmd, repo, dep.steps); if (!i.ok) return finish("fail", "安装依赖"), dep; }
+    if (project.buildCmd) { const b = await runCommandInto("构建", project.buildCmd, repo, dep.steps); if (!b.ok) return finish("fail", "构建"), dep; }
+    if (project.restartService) {
+      const s = { name: "重启服务", state: "running", output: "" };
+      dep.steps.push(s);
+      const r = await restartService(project.restartService);
+      s.state = r.ok ? "done" : "fail";
+      s.output = r.ok ? `已重启 ${project.restartService}` : "重启失败: " + r.msg;
+      if (!r.ok) return finish("fail", "重启服务"), dep;
+    }
+    finish("ok", null);
+    if (kind === "deploy" && dep.commit) project.lastGoodCommit = dep.commit;
+    project.deployHistory = project.deployHistory || [];
+    project.deployHistory.unshift({ at: dep.startedAt, kind, commit: dep.commit, msg: dep.commitMsg || "", result: "ok" });
+    project.deployHistory = project.deployHistory.slice(0, 50);
+    saveProjects();
+  } catch (e) {
+    dep.steps.push({ name: "异常", state: "fail", output: String(e && e.stack ? e.stack : e) });
+    finish("fail", "异常");
+  }
+  return dep;
+}
+
+// 项目列表（附带关联服务状态）
+app.get("/api/projects", (req, res) => {
+  withPm2(res, () => {
+    pm2.list((err, list) => {
+      if (err) return res.status(500).json({ error: err.message });
+      const byName = {};
+      (list || []).forEach((p) => { if (!byName[p.name]) byName[p.name] = { status: p.pm2_env ? p.pm2_env.status : p.status, restartCount: p.pm2_env ? p.pm2_env.restart_time : 0 }; });
+      res.json({ projects: projects.map((p) => Object.assign({}, p, { serviceStatus: p.restartService ? (byName[p.restartService] || { status: "unknown" }) : null })) });
+    });
+  });
+});
+app.post("/api/projects", (req, res) => {
+  const b = req.body || {};
+  if (!b.name || !String(b.name).trim()) return res.status(400).json({ error: "缺少项目名称" });
+  if (!b.repoDir || !String(b.repoDir).trim()) return res.status(400).json({ error: "缺少项目目录 repoDir" });
+  const proj = {
+    id: "p-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 6),
+    name: String(b.name).trim(), gitUrl: String(b.gitUrl || "").trim(), repoDir: String(b.repoDir).trim(),
+    framework: String(b.framework || "node").trim(), installCmd: String(b.installCmd || "").trim(),
+    buildCmd: String(b.buildCmd || "").trim(), restartService: String(b.restartService || "").trim(),
+    description: String(b.description || "").trim(), createdAt: new Date().toISOString(), lastGoodCommit: null, deployHistory: []
+  };
+  projects.push(proj); saveProjects();
+  res.json({ ok: true, project: proj });
+});
+app.patch("/api/projects/:id", (req, res) => {
+  const p = projects.find((x) => x.id === req.params.id);
+  if (!p) return res.status(404).json({ error: "项目不存在" });
+  const b = req.body || {};
+  ["name", "gitUrl", "repoDir", "framework", "installCmd", "buildCmd", "restartService", "description"].forEach((k) => { if (b[k] !== undefined) p[k] = String(b[k]).trim(); });
+  saveProjects();
+  res.json({ ok: true, project: p });
+});
+app.delete("/api/projects/:id", (req, res) => {
+  const i = projects.findIndex((x) => x.id === req.params.id);
+  if (i < 0) return res.status(404).json({ error: "项目不存在" });
+  projects.splice(i, 1); saveProjects();
+  res.json({ ok: true });
+});
+app.post("/api/projects/:id/deploy", async (req, res) => {
+  const p = projects.find((x) => x.id === req.params.id);
+  if (!p) return res.status(404).json({ error: "项目不存在" });
+  const dep = await runPipeline(p, "deploy");
+  res.json({ ok: true, deployId: dep.id, projectId: p.id });
+});
+app.post("/api/projects/:id/rollback", async (req, res) => {
+  const p = projects.find((x) => x.id === req.params.id);
+  if (!p) return res.status(404).json({ error: "项目不存在" });
+  const dep = await runPipeline(p, "rollback");
+  res.json({ ok: true, deployId: dep.id, projectId: p.id });
+});
+app.get("/api/projects/:id/deploys/:deployId", (req, res) => {
+  const dep = DEPLOYS.get(req.params.deployId);
+  if (!dep) return res.status(404).json({ error: "部署记录不存在（中控台重启后历史运行记录会清空，已完成的历史在项目里）" });
+  res.json(dep);
 });
 
 /* ---------- 启动 ---------- */
