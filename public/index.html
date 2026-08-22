@@ -43,8 +43,10 @@
   button.small{padding:4px 10px;font-size:12px}
   .table-wrap{overflow-x:auto}
   table{width:100%;border-collapse:collapse;font-size:13px}
-  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
-  th{color:var(--muted);font-weight:normal;font-size:12px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  th{color:var(--muted);font-weight:normal;font-size:12px;position:relative;user-select:none}
+  th .col-resizer{position:absolute;top:0;right:-4px;width:8px;height:100%;cursor:col-resize;z-index:2;touch-action:none}
+  th .col-resizer:hover{background:rgba(127,127,127,.3)}
   tr:hover td{background:rgba(79,140,255,.06)}
   .status{display:inline-flex;align-items:center;gap:6px}
   .status i{width:8px;height:8px;border-radius:50%;display:inline-block}
@@ -313,11 +315,14 @@ let CATS = [], FILTER = "全部", monitor = null, hist = {}, currentLogName = nu
 
 /* 通用输入弹窗（替代 prompt —— Electron 渲染进程不支持 prompt）
  * 返回 Promise<string|null>；取消/关闭返回 null */
-function askModal(title, placeholder = "", defaultValue = "") {
+function askModal(title, placeholder = "", defaultValue = "", asPassword = false) {
   return new Promise((resolve) => {
     const bg = $("tokenModalBg");
     $("tokenModalTitle").textContent = title || "输入";
     const inp = $("tokenInput");
+    // 通用输入弹窗必须是文本框；令牌专用场景才用密码框。
+    // 原代码复用 #tokenInput（HTML 里 type=password）但从不改 type，导致所有弹窗都变成密码框。
+    inp.type = asPassword ? "password" : "text";
     inp.value = defaultValue;
     inp.placeholder = placeholder;
     bg.style.display = "flex";
@@ -343,7 +348,7 @@ async function api(path, opts = {}) {
     if (window.desktopEnv && window.desktopEnv.getToken) {
       try { const injected = await window.desktopEnv.getToken(); if (injected && injected !== "admin") t = injected; } catch { /* 忽略 */ }
     }
-    if (!t) t = await askModal("🔑 输入中控台令牌", "粘贴服务端 CONSOLE_TOKEN…", TOKEN);
+    if (!t) t = await askModal("🔑 输入中控台令牌", "粘贴服务端 CONSOLE_TOKEN…", TOKEN, true);
     if (t === null || t === "") throw new Error("未授权：令牌无效");
     TOKEN = t; localStorage.setItem("consoleToken", t);
     $("errBanner").style.display = "none";
@@ -388,7 +393,8 @@ async function loadCats() {
     const fillCatSelect = (sel, cur) => {
       const opts = [...CATS, "未分类"];
       sel.innerHTML = opts.map((c) => `<option value="${esc(c)}" ${c === cur ? "selected" : ""}>${esc(c)}</option>`)
-        + `<option value="__new__">＋ 新分类…</option>`;
+        + `<option value="__new__">＋ 新分类…</option>`
+        + `<option value="__del__">🗑 删除分类…</option>`;
     };
     fillCatSelect($("inCategory"), null);
     const chips = $("chips");
@@ -409,10 +415,15 @@ $("inTemplate").onchange = () => {
   $("tmplHint").textContent = `示例：${TM_PLACEHOLDER[$("inTemplate").value] || ""}`;
 };
 $("inCategory").onchange = async () => {
-  if ($("inCategory").value === "__new__") {
+  const v = $("inCategory").value;
+  if (v === "__new__") {
     const n = await askModal("新分类名称：", "输入分类名称…", "");
     if (n && n.trim()) { await api("/api/categories", { method: "POST", body: { name: n.trim() } }); await loadCats(); }
     else $("inCategory").value = "未分类";
+  } else if (v === "__del__") {
+    $("inCategory").value = "未分类";
+    renderCatModal();
+    $("catModalBg").style.display = "flex";
   }
 };
 $("btnNewCat").onclick = async () => {
@@ -469,7 +480,7 @@ function renderList() {
   const catOptions = ["未分类", ...CATS].map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
   tb.innerHTML = list.map((p) => `
       <tr>
-        <td><b>${esc(p.name)}</b>${p.remark ? `<div class="muted" style="font-size:11px">${esc(p.remark)}</div>` : ""}</td>
+        <td title="${esc(p.name)}"><b>${esc(p.name)}</b>${p.remark ? `<div class="muted" style="font-size:11px">${esc(p.remark)}</div>` : ""}</td>
         <td><select class="cat-select" onchange="setCat(${p.id}, this.value)">${catOptions.replace(`value="${esc(p.category||"未分类")}"`, `value="${esc(p.category||"未分类")}" selected`)}</select></td>
         <td><span class="status ${SCLASS[p.status]||"st-unknown"}"><i></i>${SZH[p.status]||p.status}</span></td>
         <td class="mono">${p.restartCount}</td>
@@ -490,6 +501,58 @@ function renderList() {
           ${p.webUrl ? `<button class="small" onclick="openUrl('${esc(p.webUrl)}')" title="${esc(p.webUrl)}">🌐 打开</button>` : ""}
         </div></td>
       </tr>`).join("");
+}
+/* ---------- 服务列表列宽拖拽（宽度记忆到 localStorage） ---------- */
+const COL_W_KEY = "pm2c-cols-w";
+function initColResize() {
+  const table = document.querySelector("#card-services table");
+  if (!table || table.__colResizeInit) return;
+  table.__colResizeInit = true;
+  const ths = Array.from(table.tHead.rows[0].cells);
+  const saveW = () => {
+    const cur = {};
+    ths.forEach((t, j) => { cur[j] = Math.round(t.getBoundingClientRect().width); });
+    try { localStorage.setItem(COL_W_KEY, JSON.stringify(cur)); } catch { /* 忽略 */ }
+  };
+  const applyW = (w) => {
+    const widths = ths.map((t, j) => (w && w[j]) ? w[j] : t.offsetWidth);
+    ths.forEach((t, j) => { t.style.width = Math.max(50, widths[j]) + "px"; });
+    table.style.tableLayout = "fixed";
+  };
+  // 有记忆的宽度 → 直接恢复；否则等首次真实数据渲染后测自然宽
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(COL_W_KEY) || "null"); } catch { saved = null; }
+  if (saved && Object.keys(saved).length) {
+    applyW(saved);
+  } else {
+    const measure = () => {
+      const body = table.tBodies[0];
+      if (body && body.rows.length && !body.querySelector(".empty")) { applyW(null); clearInterval(timer); }
+    };
+    const timer = setInterval(measure, 250);
+    setTimeout(() => clearInterval(timer), 8000);   // 兜底：8 秒无数据则放弃测量，保持自适应
+  }
+  // 拖拽把手
+  ths.forEach((th) => {
+    const rz = document.createElement("span");
+    rz.className = "col-resizer";
+    rz.title = "拖动调整列宽";
+    th.appendChild(rz);
+    rz.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      table.style.tableLayout = "fixed";
+      const startX = e.clientX;
+      const startW = th.getBoundingClientRect().width;
+      const onMove = (ev) => { th.style.width = Math.max(50, Math.round(startW + ev.clientX - startX)) + "px"; };
+      const onUp = () => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        saveW();
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+  });
 }
 function fillLsService() {
   const sel = $("lsService"), cur = sel.value;
@@ -579,8 +642,12 @@ $("btnAdd").onclick = async () => {
   } catch (e) { toast(e.message, true); }
 };
 $("btnPresetDsh").onclick = async () => {
-  try { const r = await api("/api/presets/dsh", { method: "POST" }); toast(r.message + "（" + (r.note || "") + "）"); setTimeout(loadList, 800); }
-  catch (e) { toast(e.message, true); }
+  const workspace = prompt("DSH Web 工作目录（必须是已存在的目录，留空用默认）：", "E:\\AI\\dsh-workspace");
+  if (workspace === null) return; // 用户取消
+  try {
+    const r = await api("/api/presets/dsh", { method: "POST", body: { workspace: workspace.trim() } });
+    toast(r.message + "（" + (r.note || "") + "）"); setTimeout(loadList, 800);
+  } catch (e) { toast(e.message, true); }
 };
 
 /* ---------- 进程发现与拉入 ---------- */
@@ -992,6 +1059,7 @@ async function init() {
     showModule(valid ? saved : "card-overview");
   }
   await Promise.allSettled([loadCats(), loadList(), loadProjects(), loadHealth()]);
+  initColResize();
   setInterval(loadList, 3000);
   setInterval(loadHealth, 10000);
   await loadPlugins();

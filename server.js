@@ -23,7 +23,7 @@ const HOST = process.env.CONSOLE_HOST || "127.0.0.1";
 const PORT = Number(process.env.CONSOLE_PORT || 3090);
 const TOKEN = process.env.CONSOLE_TOKEN || "admin";
 const PM2_HOME = process.env.PM2_HOME || path.join(os.homedir(), ".pm2");
-const DSH_WORKSPACE = process.env.DSH_WORKSPACE || "D:\\ai\\dsh-workspace";
+const DSH_WORKSPACE = process.env.DSH_WORKSPACE || "E:\\AI\\dsh-workspace";
 const STATE_DIR = process.env.CONSOLE_STATE_DIR || path.join(__dirname, "data");
 const STATE_FILE = path.join(STATE_DIR, "state.json");
 const DEFAULT_CATEGORIES = ["AI 工具", "Web 服务", "Java 应用", "数据库", "工具"];
@@ -158,6 +158,12 @@ function parseEnvText(text) {
 }
 
 function resolveDshEntry() {
+  // 优先：全局安装的 @deepseek-ai/dsh（与 cmd 的 dsh 命令同版本，更新只走 npm update -g）
+  // Windows 全局 node_modules 位于 %APPDATA%\npm\node_modules
+  const globalRoot = path.join(process.env.APPDATA || "", "npm", "node_modules");
+  const g = path.join(globalRoot, "@deepseek-ai", "dsh", "lib", "bin.js");
+  if (fs.existsSync(g)) return g;
+  // 兜底：npx 缓存里最新的 dsh
   const cacheRoot = path.join(process.env.LOCALAPPDATA || "", "npm-cache", "_npx");
   if (!fs.existsSync(cacheRoot)) return null;
   let best = null, bestTime = 0;
@@ -444,6 +450,12 @@ app.get("/api/processes/:id/logs", (req, res) => {
 app.post("/api/presets/dsh", (req, res) => {
   const bin = resolveDshEntry();
   if (!bin) return res.status(500).json({ error: "未找到 dsh 入口（npm 缓存里没有 @deepseek-ai/dsh），请先用 npx 运行过一次" });
+  // 工作目录：优先用拉入时填写的 workspace，其次环境变量/默认值；必须存在，否则拒绝启动（参照 start-dsh.cmd 不依赖死目录）
+  const requested = (req.body && req.body.workspace && req.body.workspace.trim()) || DSH_WORKSPACE;
+  const cwd = path.resolve(requested);
+  if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
+    return res.status(400).json({ error: `工作目录不存在：${cwd} —— 请填写一个真实存在的目录（或留空用默认）` });
+  }
   // 端口预检：3080 被占用说明有别的 dsh 实例在跑，先提示，避免拉起后崩溃循环
   const net = require("net");
   const probe = net.connect({ host: "127.0.0.1", port: 3080 });
@@ -455,11 +467,11 @@ app.post("/api/presets/dsh", (req, res) => {
     state.serviceCategory["dsh-web"] = "AI 工具";
     saveState();
     pm2.start({
-      name: "dsh-web", script: process.execPath, args: [bin, "web"], cwd: DSH_WORKSPACE,
+      name: "dsh-web", script: process.execPath, args: [bin, "web"], cwd,
       interpreter: "none", autorestart: true, max_restarts: 20, min_uptime: "2s", kill_timeout: 10000
     }, (err) => {
       if (err) return res.status(500).json({ error: err.message });
-      res.json({ ok: true, message: "dsh-web 已拉入（分类：AI 工具）", note: "浏览器访问 http://127.0.0.1:3080" });
+      res.json({ ok: true, message: "dsh-web 已拉入（分类：AI 工具）", note: `浏览器访问 http://127.0.0.1:3080（工作目录：${cwd}）` });
     });
   });
   probe.setTimeout(3000, () => { probe.destroy(); res.status(500).json({ error: "端口探测超时" }); });
