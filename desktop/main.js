@@ -7,7 +7,7 @@
  *  - preload 注入桌面端令牌（避免首次使用弹窗输令牌）
  */
 import { app, BrowserWindow, ipcMain, shell } from "electron";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,8 +24,11 @@ const HOST = process.env.CONSOLE_HOST || "127.0.0.1";
 function resolveToken() {
   if (process.env.CONSOLE_TOKEN && process.env.CONSOLE_TOKEN !== "admin") return process.env.CONSOLE_TOKEN;
   try {
-    const { execSync } = require("node:child_process");
-    const v = execSync(`reg query "HKCU\\Environment" /v CONSOLE_TOKEN`, { encoding: "utf8", windowsHide: true, timeout: 3000 });
+    const v = execFileSync("reg", ["query", "HKCU\\Environment", "/v", "CONSOLE_TOKEN"], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 3000
+    });
     const m = /CONSOLE_TOKEN\s+REG_\w+\s+(.+)/.exec(v);
     if (m && m[1] && m[1].trim() && m[1].trim() !== "admin") return m[1].trim();
   } catch { /* 未设置用户级变量 */ }
