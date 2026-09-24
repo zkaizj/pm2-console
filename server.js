@@ -168,13 +168,26 @@ function resolveDshEntry() {
   return best;
 }
 
+const MAX_LOG_TAIL_BYTES = 2 * 1024 * 1024;
 function readLogTail(name, lines) {
   const out = path.join(PM2_HOME, "logs", `${name}-out.log`);
   const err = path.join(PM2_HOME, "logs", `${name}-error.log`);
   const tail = (file) => {
-    if (!fs.existsSync(file)) return "";
-    const arr = fs.readFileSync(file, "utf8").split(/\r?\n/);
-    return arr.slice(-lines).join("\n");
+    let fd;
+    try {
+      fd = fs.openSync(file, "r");
+      const size = fs.fstatSync(fd).size;
+      const start = Math.max(0, size - MAX_LOG_TAIL_BYTES);
+      const buf = Buffer.alloc(size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      return buf.toString("utf8").split(/\r?\n/).slice(-lines).join("\n");
+    } catch {
+      return "";
+    } finally {
+      if (fd !== undefined) {
+        try { fs.closeSync(fd); } catch {}
+      }
+    }
   };
   return { stdout: tail(out), stderr: tail(err) };
 }
@@ -307,10 +320,34 @@ function alertThrottled(key) {
   alertLastAt[key] = now;
   return true;
 }
+const MAX_PROBE_BODY_BYTES = 64 * 1024;
+async function readResponseTextLimited(response, maxBytes) {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (total < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const remaining = maxBytes - total;
+      const chunk = value.byteLength > remaining ? value.slice(0, remaining) : value;
+      chunks.push(Buffer.from(chunk));
+      total += chunk.byteLength;
+      if (chunk.byteLength < value.byteLength) break;
+    }
+  } finally {
+    try { await reader.cancel(); } catch {}
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
 function probeUrl(url) {
   const t0 = performance.now();
-  return fetch(url, { signal: AbortSignal.timeout(6000), redirect: "follow" })
-    .then((r) => r.text().catch(() => "").then((body) => ({ ok: r.ok, status: r.status, latencyMs: Math.round(performance.now() - t0), body })))
+  let parsed;
+  try { parsed = new URL(String(url)); } catch { return Promise.resolve({ ok: false, status: 0, latencyMs: 0, err: "健康检查地址无效" }); }
+  if (!/^https?:$/.test(parsed.protocol)) return Promise.resolve({ ok: false, status: 0, latencyMs: 0, err: "健康检查仅支持 HTTP/HTTPS" });
+  return fetch(parsed, { signal: AbortSignal.timeout(6000), redirect: "follow" })
+    .then(async (r) => ({ ok: r.ok, status: r.status, latencyMs: Math.round(performance.now() - t0), body: await readResponseTextLimited(r, MAX_PROBE_BODY_BYTES) }))
     .catch((e) => ({ ok: false, status: 0, latencyMs: Math.round(performance.now() - t0), err: String(e.message || e) }));
 }
 /** 周期健康巡检：更新 healthCache，pm2 状态异常 & 健康失败时告警 */
@@ -657,7 +694,10 @@ async function runPipeline(project, kind) {
   };
   const finish = (status, errorStep) => {
     dep.status = status; dep.finishedAt = new Date().toISOString(); dep.errorStep = errorStep;
-    if (status === "fail") recordHistory(dep.autoRolledBack ? "fail-rollback" : "fail");
+    if (status === "fail") {
+      recordHistory(dep.autoRolledBack ? "fail-rollback" : "fail");
+      saveProjects();
+    }
   };
   try {
     const isGit = await captureCommand(`git -C "${repo}" rev-parse --is-inside-work-tree`, repo);
@@ -707,14 +747,23 @@ async function runPipeline(project, kind) {
         dep.autoRolledBack = !!project.lastGoodCommit;
         if (project.lastGoodCommit) {
           s.output += "❌ 健康检查未通过，自动回滚到上次成功版本...\n";
-          await runCommandInto("自动回滚: git reset", `git -C "${repo}" reset --hard ${project.lastGoodCommit}`, repo, dep.steps);
-          if (project.installCmd) await runCommandInto("自动回滚: 安装依赖", project.installCmd, repo, dep.steps);
-          if (project.buildCmd) await runCommandInto("自动回滚: 构建", project.buildCmd, repo, dep.steps);
+          let rollbackOk = true;
+          const reset = await runCommandInto("自动回滚: git reset", `git -C "${repo}" reset --hard ${project.lastGoodCommit}`, repo, dep.steps);
+          rollbackOk = reset.ok;
+          if (project.installCmd) {
+            const install = await runCommandInto("自动回滚: 安装依赖", project.installCmd, repo, dep.steps);
+            rollbackOk = rollbackOk && install.ok;
+          }
+          if (project.buildCmd) {
+            const build = await runCommandInto("自动回滚: 构建", project.buildCmd, repo, dep.steps);
+            rollbackOk = rollbackOk && build.ok;
+          }
           if (project.restartService) {
             const r2 = await restartService(project.restartService);
+            rollbackOk = rollbackOk && r2.ok;
             dep.steps.push({ name: "自动回滚: 重启服务", state: r2.ok ? "done" : "fail", output: r2.ok ? "已重启" : r2.msg });
           }
-          dep.steps.push({ name: "自动回滚完成", state: "done", output: `已回滚到 ${project.lastGoodCommit.slice(0, 8)}` });
+          dep.steps.push({ name: rollbackOk ? "自动回滚完成" : "自动回滚失败", state: rollbackOk ? "done" : "fail", output: rollbackOk ? `已回滚到 ${project.lastGoodCommit.slice(0, 8)}` : "回滚过程中有步骤失败，请检查上方日志" });
         } else {
           s.output += "❌ 健康检查未通过，且没有上次成功版本可回滚（首次部署）\n";
         }
@@ -777,13 +826,15 @@ app.delete("/api/projects/:id", (req, res) => {
 app.post("/api/projects/:id/deploy", async (req, res) => {
   const p = projects.find((x) => x.id === req.params.id);
   if (!p) return res.status(404).json({ error: "项目不存在" });
-  const dep = await runPipeline(p, "deploy");
+  runPipeline(p, "deploy").catch((e) => console.error("[pm2-console] 部署任务异常:", e));
+  const dep = [...DEPLOYS.values()].at(-1);
   res.json({ ok: true, deployId: dep.id, projectId: p.id });
 });
 app.post("/api/projects/:id/rollback", async (req, res) => {
   const p = projects.find((x) => x.id === req.params.id);
   if (!p) return res.status(404).json({ error: "项目不存在" });
-  const dep = await runPipeline(p, "rollback");
+  runPipeline(p, "rollback").catch((e) => console.error("[pm2-console] 回滚任务异常:", e));
+  const dep = [...DEPLOYS.values()].at(-1);
   res.json({ ok: true, deployId: dep.id, projectId: p.id });
 });
 app.get("/api/projects/:id/deploys/:deployId", (req, res) => {
@@ -858,10 +909,11 @@ for (const p of plugins) {
 }
 
 /* 注册插件服务端模块（仅启用者） */
-for (const p of plugins) {
-  if (!pluginEnabled(p.id)) continue;
+const registeredPluginServers = new Set();
+function registerPluginServer(p) {
+  if (registeredPluginServers.has(p.id) || !pluginEnabled(p.id)) return true;
   const srv = path.join(p.dir, "server.js");
-  if (!fs.existsSync(srv)) continue;
+  if (!fs.existsSync(srv)) return true;
   try {
     const mod = require(srv);
     if (typeof mod.register === "function") {
@@ -875,11 +927,16 @@ for (const p of plugins) {
         TOKEN
       });
       console.log(`[plugins] 已注册服务端: ${p.id}`);
+      registeredPluginServers.add(p.id);
+      return true;
     }
   } catch (e) {
     console.error(`[plugins] ${p.id} 服务端加载失败:`, e.message);
+    return false;
   }
+  return true;
 }
+for (const p of plugins) registerPluginServer(p);
 
 /* 插件列表 / 启停管理 API */
 app.get("/api/plugins", (req, res) => {
@@ -904,6 +961,7 @@ app.post("/api/plugins/:id/enable", (req, res) => {
   const p = plugins.find((x) => x.id === req.params.id);
   if (!p) return res.status(404).json({ error: "插件不存在" });
   setPluginEnabled(p.id, true);
+  if (!registerPluginServer(p)) return res.status(500).json({ error: "插件服务端加载失败，请查看中控台日志" });
   res.json({ ok: true, enabled: true, id: p.id });
 });
 app.post("/api/plugins/:id/disable", (req, res) => {

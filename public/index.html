@@ -364,6 +364,7 @@ function showBanner(msg) {
 }
 window.onerror = (msg, src, line) => { showBanner("页面脚本错误：" + msg + "（行 " + line + "）"); };
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+const jsAttr = (s) => esc(JSON.stringify(String(s ?? "")));
 function shortPath(p){ if(!p) return "-"; const s=p.replace(/\\/g,"/"); return s.length>40 ? "…"+s.slice(-40) : s; }
 function fmtUptime(ms){ if(ms===null||ms===undefined) return "-"; let s=Math.floor(ms/1000); const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600),m=Math.floor((s%3600)/60); s%=60;
   if(d)return `${d}天${h}时`; if(h)return `${h}时${m}分`; if(m)return `${m}分${s}秒`; return `${s}秒`; }
@@ -426,8 +427,8 @@ $("btnCloseCat").onclick = () => { $("catModalBg").style.display = "none"; };
 function renderCatModal() {
   $("catList").innerHTML = CATS.map((c) => `
     <div class="item"><span class="name">${esc(c)}</span>
-      <button class="small" onclick="renameCat('${esc(c)}')">✎ 重命名</button>
-      <button class="small danger" onclick="delCat('${esc(c)}')">🗑 删除</button>
+      <button class="small" onclick="renameCat(${jsAttr(c)})">✎ 重命名</button>
+      <button class="small danger" onclick="delCat(${jsAttr(c)})">🗑 删除</button>
     </div>`).join("") + `<div class="item muted" style="border:none">未分类为内置分类，不可管理</div>`;
 }
 async function renameCat(old) {
@@ -483,11 +484,11 @@ function renderList() {
           <button class="small" onclick="doAction(${p.id},'restart')">🔄 重启</button>
           <button class="small danger" onclick="doAction(${p.id},'delete')">🗑 删除</button>
         </div></td>
-        <td><button class="small" onclick="showLog('${esc(p.name)}',${p.id})">📜 日志</button></td>
-        <td><button class="small" onclick="showMon('${esc(p.name)}',${p.id})">📈 监控</button></td>
+        <td><button class="small" onclick="showLog(${jsAttr(p.name)},${p.id})">📜 日志</button></td>
+        <td><button class="small" onclick="showMon(${jsAttr(p.name)},${p.id})">📈 监控</button></td>
         <td><div class="actions">
-          <button class="small" onclick="editMeta('${esc(p.name)}',${p.id})" title="设置备注/页面">⚙️</button>
-          ${p.webUrl ? `<button class="small" onclick="openUrl('${esc(p.webUrl)}')" title="${esc(p.webUrl)}">🌐 打开</button>` : ""}
+          <button class="small" onclick="editMeta(${jsAttr(p.name)},${p.id})" title="设置备注/页面">⚙️</button>
+          ${p.webUrl ? `<button class="small" onclick="openUrl(${jsAttr(p.webUrl)})" title="${esc(p.webUrl)}">🌐 打开</button>` : ""}
         </div></td>
       </tr>`).join("");
 }
@@ -607,7 +608,7 @@ function renderDiscover() {
       <td><div class="actions">
         <button class="small" onclick="importProc(${p.pid}, false)">➕ 拉入</button>
         <button class="small" onclick="importProc(${p.pid}, true)">➕ 拉入并停原</button>
-        <button class="small danger" onclick="killProc(${p.pid}, '${esc(p.name)}')">⛔ 关闭</button>
+        <button class="small danger" onclick="killProc(${p.pid}, ${jsAttr(p.name)})">⛔ 关闭</button>
       </div></td>
     </tr>`).join("");
 }
@@ -659,10 +660,10 @@ function renderProjects() {
         <span class="muted">[${esc(p.framework || "node")}]</span>
         ${p.serviceStatus ? `<span class="status ${statusClass(p.serviceStatus.status)}"><i></i>${SZH[p.serviceStatus.status] || p.serviceStatus.status}</span>` : ""}
         <span class="spacer"></span>
-        <button class="small" onclick="startDeploy('${esc(p.id)}','deploy')">🚀 部署</button>
-        <button class="small" onclick="startDeploy('${esc(p.id)}','rollback')">↩️ 回滚</button>
-        <button class="small" onclick="editProject('${esc(p.id)}')">✎ 编辑</button>
-        <button class="small danger" onclick="delProject('${esc(p.id)}')">🗑</button>
+        <button class="small" onclick="startDeploy(${jsAttr(p.id)},'deploy')">🚀 部署</button>
+        <button class="small" onclick="startDeploy(${jsAttr(p.id)},'rollback')">↩️ 回滚</button>
+        <button class="small" onclick="editProject(${jsAttr(p.id)})">✎ 编辑</button>
+        <button class="small danger" onclick="delProject(${jsAttr(p.id)})">🗑</button>
       </div>
       <div class="proj-meta muted mono">${esc(shortPath(p.repoDir))}${p.gitUrl ? " · " + esc(shortPath(p.gitUrl)) : ""}${p.restartService ? " · 服务:" + esc(p.restartService) : ""}</div>
       ${p.description ? `<div class="proj-desc muted">${esc(p.description)}</div>` : ""}
@@ -823,7 +824,7 @@ function renderHealth() {
           <td><b>${esc(x.name)}</b></td>
           <td><span class="status ${SCLASS[x.status] || "st-unknown"}"><i></i>${SZH[x.status] || x.status}</span></td>
           <td>${hc}</td><td class="mono muted">${lat}</td>
-          <td>${x.webUrl ? `<button class="small" onclick="openUrl('${esc(x.webUrl)}')">🌐</button>` : "-"}</td>
+          <td>${x.webUrl ? `<button class="small" onclick="openUrl(${jsAttr(x.webUrl)})">🌐</button>` : "-"}</td>
         </tr>`;
       }).join("") + "</tbody></table>";
 }

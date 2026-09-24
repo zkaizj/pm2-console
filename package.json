@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "test": "node --test",
     "build:kb": "vite build --config vite.vendor.config.mjs && node -e \"const fs=require('fs');const d='plugins/kb/vendor';if(fs.existsSync(d+'/style.css')){fs.copyFileSync(d+'/style.css',d+'/kb-vendor.css');fs.unlinkSync(d+'/style.css');}\"",
     "patch:windowshide": "where pwsh >nul 2>&1 && pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/patch-dsh-windowshide.ps1 || powershell -NoProfile -ExecutionPolicy Bypass -File scripts/patch-dsh-windowshide.ps1"
   },
