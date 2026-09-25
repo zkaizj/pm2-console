@@ -19,7 +19,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { readJson, writeJsonAtomically } = require("./lib/persistence");
-const { isAttentionRequired, shouldAlertHealth } = require("./lib/operations");
+const { isAttentionRequired, shouldAlertHealth, canCompleteHandoff } = require("./lib/operations");
 
 const HOST = process.env.CONSOLE_HOST || "127.0.0.1";
 const PORT = Number(process.env.CONSOLE_PORT || 3090);
@@ -706,31 +706,121 @@ app.post("/api/discover/:pid/kill", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// 把检测到的进程"拉入" pm2 托管: { name?, category?, stopOriginal?, cwd? }
-app.post("/api/discover/:pid/import", async (req, res) => {
-  try {
-    const pid = Number(req.params.pid);
-    const { name, category, stopOriginal, cwd } = req.body || {};
-    const procs = await queryProcessesJson(pid);
-    const p = procs[0];
-    if (!p || !p.ExecutablePath || !p.CommandLine) return res.status(404).json({ error: `进程 ${pid} 不存在或无法读取启动命令` });
-    const exe = p.ExecutablePath;
-    const tokens = tokenizeCommand(p.CommandLine);
-    const args = tokens.length > 1 ? tokens.slice(1) : [];
-    const appName = (name && String(name).trim()) || path.basename(exe).replace(/\.exe$/i, "");
-    const stopped = stopOriginal ? await killProcess(pid) : false;
-    if (category && String(category).trim()) state.serviceCategory[appName] = String(category).trim();
-    saveState();
-    pm2.start({
-      name: appName, script: exe, args, cwd: (cwd && String(cwd).trim()) || path.dirname(exe),
-      interpreter: "none", autorestart: true, max_restarts: 20, min_uptime: "2s", kill_timeout: 5000, windowsHide: true
-    }, (err) => {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json({ ok: true, message: `已拉入 ${appName}（原进程${stopped ? "已停止" : "仍在运行，请注意端口冲突"}）`, name: appName, originalStopped: stopped });
+function startedServiceId(result) {
+  const process = Array.isArray(result) ? result[0] : result;
+  const id = Number(process && (process.pm_id ?? (process.pm2_env && process.pm2_env.pm_id)));
+  return Number.isInteger(id) ? id : null;
+}
+
+function findServiceIdByName(name) {
+  return new Promise((resolve) => {
+    pm2.list((error, list) => {
+      if (error) return resolve(null);
+      const matches = (list || []).filter((process) => process.name === name);
+      const latest = matches.sort((left, right) => Number(right.pm_id) - Number(left.pm_id))[0];
+      const id = Number(latest && latest.pm_id);
+      resolve(Number.isInteger(id) ? id : null);
     });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  });
+}
+
+function waitForPm2Online(id, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve) => {
+    const check = () => {
+      pm2.describe(Number(id), (error, data) => {
+        const process = Array.isArray(data) ? data[0] : data;
+        const env = process && process.pm2_env || {};
+        const status = env.status || process && process.status || "unknown";
+        const result = {
+          online: status === "online",
+          serviceId: Number(process && process.pm_id) || Number(id),
+          serviceName: process && process.name || null,
+          status,
+          error: error ? error.message : null
+        };
+        if (result.online || Date.now() >= deadline) return resolve(result);
+        setTimeout(check, 500);
+      });
+    };
+    check();
+  });
+}
+
+async function verifyManagedService(serviceId, fallbackName) {
+  const verification = await waitForPm2Online(serviceId);
+  const serviceName = verification.serviceName || fallbackName;
+  let health = null;
+  if (verification.online && serviceMeta(serviceName).healthUrl) health = await checkServiceHealth(serviceName, serviceMeta(serviceName));
+  return Object.assign({}, verification, { serviceName, health });
+}
+
+function startDiscoveredProcess(options) {
+  return new Promise((resolve, reject) => {
+    pm2.start(options, (error, result) => error ? reject(error) : resolve(result));
+  });
+}
+
+// 把检测到的进程拉入 PM2；原始进程始终保留，等待单独的安全交接。
+app.post("/api/discover/:pid/import", (req, res) => {
+  withPm2(res, async () => {
+    try {
+      const pid = Number(req.params.pid);
+      const { name, category, cwd, webUrl, remark, healthUrl, healthKeyword, watched } = req.body || {};
+      const procs = await queryProcessesJson(pid);
+      const process = procs[0];
+      if (!process || !process.ExecutablePath || !process.CommandLine) return res.status(404).json({ error: `进程 ${pid} 不存在或无法读取启动命令` });
+      const exe = process.ExecutablePath;
+      const tokens = tokenizeCommand(process.CommandLine);
+      const args = tokens.length > 1 ? tokens.slice(1) : [];
+      const serviceName = (name && String(name).trim()) || path.basename(exe).replace(/\.exe$/i, "");
+      const started = await startDiscoveredProcess({
+        name: serviceName, script: exe, args, cwd: (cwd && String(cwd).trim()) || path.dirname(exe),
+        interpreter: "none", autorestart: true, max_restarts: 20, min_uptime: "2s", kill_timeout: 5000, windowsHide: true
+      });
+      const serviceId = startedServiceId(started) || await findServiceIdByName(serviceName);
+      if (serviceId === null) return res.status(500).json({ error: "PM2 已接收启动请求，但未能确定服务编号" });
+      if (category && String(category).trim()) state.serviceCategory[serviceName] = String(category).trim();
+      state.serviceMeta[serviceName] = Object.assign({}, serviceMeta(serviceName), {
+        webUrl: String(webUrl || "").trim() || null,
+        remark: String(remark || "").trim() || null,
+        healthUrl: String(healthUrl || "").trim() || null,
+        healthKeyword: String(healthKeyword || "").trim() || null,
+        watched: Boolean(watched), desiredState: "running", ignoreUntil: null
+      });
+      const persistence = await persistManagedChange();
+      const verification = await verifyManagedService(serviceId, serviceName);
+      res.status(201).json({
+        ok: true,
+        message: verification.online ? "已拉入 PM2，原进程仍在运行；确认验证后才可安全交接" : "PM2 服务已创建但未通过验证，原进程仍在运行",
+        serviceId, serviceName, verification, recovery: persistence.recovery,
+        warning: persistence.ok ? null : `恢复快照未保存：${persistence.error}`
+      });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+});
+
+app.post("/api/discover/:pid/handoff", (req, res) => {
+  withPm2(res, async () => {
+    try {
+      const pid = Number(req.params.pid);
+      const serviceId = Number((req.body || {}).serviceId);
+      if (!Number.isInteger(serviceId)) return res.status(400).json({ error: "缺少有效的 PM2 服务编号" });
+      const original = (await queryProcessesJson(pid))[0];
+      if (!original) return res.status(404).json({ error: "原始进程已退出，无需交接" });
+      const verification = await verifyManagedService(serviceId, null);
+      if (!canCompleteHandoff(verification)) {
+        return res.status(409).json({ error: "PM2 替代服务尚未验证通过，原进程保持运行", verification });
+      }
+      const originalStopped = await killProcess(pid);
+      if (!originalStopped) return res.status(500).json({ error: "替代服务已验证，但原进程未能停止", verification, originalStopped });
+      res.json({ ok: true, pid, serviceId, verification, originalStopped });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
 });
 
 /* ---------- 项目管理（项目档案 / 一键部署 / 发布历史与回滚） ---------- */

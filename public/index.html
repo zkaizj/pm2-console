@@ -177,7 +177,7 @@
 </div>
 
 <div class="card" id="card-discover" data-module="1">
-  <h2>🔍 检测本机正在运行的进程（非系统，可一键拉入托管）</h2>
+  <h2>🔍 检测本机正在运行的进程（非系统，安全拉入 PM2）</h2>
   <div class="row" style="margin-bottom:10px">
     <input type="text" id="inDiscoverFilter" placeholder="按名称 / 路径过滤…">
     <button id="btnScan">🔄 扫描</button>
@@ -190,7 +190,16 @@
       <tbody id="discTbody"><tr><td colspan="5" class="empty">点「扫描」检测本机正在运行的非系统进程（已托管的不显示）</td></tr></tbody>
     </table>
   </div>
-  <div class="hint">「拉入」= 读取该进程的启动命令，在 pm2 中重新托管（原进程不动）；「拉入并停原」= 托管后顺手停掉原进程（避免端口冲突）。已由 pm2 管理的进程不会出现在列表里。</div>
+  <div class="ops-section">
+    <h2>安全交接</h2>
+    <div class="row"><span class="muted" id="discoverSelected">先在上方选择一个进程</span></div>
+    <div class="row" style="margin-top:8px"><label>服务名称</label><input type="text" id="discName" placeholder="选择进程后自动填写"><label>分类</label><select id="discCategory" style="flex:0 0 150px"></select></div>
+    <div class="row" style="margin-top:8px"><label>备注</label><input type="text" id="discRemark" placeholder="可选，例如端口或用途"><label>页面</label><input type="text" id="discWebUrl" placeholder="可选，例如 http://127.0.0.1:8080"></div>
+    <div class="row" style="margin-top:8px"><label>健康检查</label><input type="text" id="discHealthUrl" placeholder="可选，例如 http://127.0.0.1:8080/health"><label>关键字</label><input type="text" id="discHealthKeyword" placeholder="可选，例如 ok"><label>关注</label><input type="checkbox" id="discWatched" style="width:auto;flex:0 0 auto"></div>
+    <div class="row" style="margin-top:10px"><button class="primary" id="btnSafeImport" disabled>安全拉入 PM2</button><span class="hint" style="margin:0">原进程始终保留；只有替代服务验证通过后，才会显示关闭原进程按钮。</span></div>
+    <div id="handoffStatus" style="margin-top:10px"></div>
+  </div>
+  <div class="hint">已由 PM2 管理的进程不会出现在列表里。若原进程占用了端口，替代服务会验证失败，原进程会继续运行。</div>
 </div>
 
 <div class="card" id="card-projects" data-module="1">
@@ -444,6 +453,8 @@ async function loadCats() {
         + `<option value="__new__">＋ 新分类…</option>`;
     };
     fillCatSelect($("inCategory"), null);
+    const discoveryCategory = $("discCategory");
+    if (discoveryCategory) fillCatSelect(discoveryCategory, discoveryCategory.value || "未分类");
     const chips = $("chips");
     const count = (c) => { let n = 0; for (const k in sc) if ((sc[k] || "未分类") === c) n++; return n; };
     chips.innerHTML = `<span class="chip ${FILTER==="全部"?"active":""}" data-f="全部">全部 <span class="n">${Object.keys(sc).length}</span></span>`
@@ -774,7 +785,7 @@ $("btnPresetDsh").onclick = async () => {
 };
 
 /* ---------- 进程发现与拉入 ---------- */
-let DISCOVER = [];
+let DISCOVER = [], DISCOVER_SELECTED = null, HANDOFF = null;
 async function scanDiscover() {
   $("discoverInfo").textContent = "扫描中…";
   try {
@@ -795,34 +806,94 @@ function renderDiscover() {
       <td class="mono muted" title="${esc(p.cmdline)}">${esc(shortPath(p.cmdline))}</td>
       <td class="mono">${p.pid}</td>
       <td><div class="actions">
-        <button class="small" onclick="importProc(${p.pid}, false)">➕ 拉入</button>
-        <button class="small" onclick="importProc(${p.pid}, true)">➕ 拉入并停原</button>
-        <button class="small danger" onclick="killProc(${p.pid}, ${jsAttr(p.name)})">⛔ 关闭</button>
+        <button class="small primary" onclick="selectDiscoverProcess(${p.pid})">选择并交接</button>
       </div></td>
     </tr>`).join("");
 }
-async function importProc(pid, stopOriginal) {
-  const p = DISCOVER.find((x) => x.pid === pid);
-  if (!p) return toast("进程已不在列表，请重新扫描", true);
-  const suggested = p.name.replace(/\.exe$/i, "");
-  const name = await askModal(`拉入为服务（名称，默认 ${suggested}）：`, suggested, suggested);
-  if (name === null) return;
-  const category = (await askModal("归入分类（留空为未分类）：", "未分类", "")) || "";
-  try {
-    const r = await api(`/api/discover/${pid}/import`, { method: "POST", body: { name: name.trim() || undefined, category, stopOriginal: !!stopOriginal } });
-    toast(r.message || "已拉入 " + name);
-    setTimeout(() => { scanDiscover(); loadList(); }, 1000);
-  } catch (e) { toast(e.message, true); }
+function selectDiscoverProcess(pid) {
+  const process = DISCOVER.find((item) => item.pid === pid);
+  if (!process) return toast("进程已不在列表，请重新扫描", true);
+  DISCOVER_SELECTED = process;
+  HANDOFF = null;
+  $("discName").value = process.name.replace(/\.exe$/i, "");
+  $("discoverSelected").textContent = `已选择：${process.name}（PID ${process.pid}）`;
+  $("btnSafeImport").disabled = false;
+  $("handoffStatus").replaceChildren();
 }
-async function killProc(pid, name) {
-  if (!confirm(`确定要关闭进程「${name}」(PID ${pid}) 吗？\n该进程不是 pm2 托管的，关闭后需要手动重新启动。`)) return;
+function renderHandoffStatus(result, isError = false) {
+  const box = $("handoffStatus");
+  box.replaceChildren();
+  if (!result) return;
+  const card = document.createElement("div");
+  card.className = "ops-item";
+  const content = document.createElement("div");
+  content.className = "content";
+  const title = document.createElement("div");
+  title.className = "title";
+  const detail = document.createElement("div");
+  detail.className = "detail";
+  const verification = result.verification || {};
+  const health = verification.health;
+  title.textContent = result.completed ? "安全交接已完成" : isError ? "安全交接未完成" : verification.online ? "替代服务已验证" : "替代服务未验证";
+  detail.textContent = result.completed ? result.message : isError ? result.message : `PM2 服务 ${result.serviceName || verification.serviceName || ""} · ${verification.online ? "已在线" : `状态：${verification.status || "未知"}`}${health ? ` · 健康检查${health.ok ? "正常" : `失败：${health.error || "未知错误"}`}` : ""}`;
+  content.append(title, detail);
+  card.append(content);
+  const actions = document.createElement("div");
+  actions.className = "actions";
+  if (HANDOFF && HANDOFF.verified) actions.append(Object.assign(document.createElement("button"), { className: "small danger", textContent: "确认关闭原进程", onclick: completeHandoff }));
+  if (result.serviceId) actions.append(Object.assign(document.createElement("button"), { className: "small", textContent: "查看替代服务", onclick: () => openServiceDetail(result.serviceId) }));
+  card.append(actions);
+  box.append(card);
+}
+async function importSelectedProcess() {
+  const process = DISCOVER_SELECTED;
+  if (!process) return toast("请先选择一个进程", true);
+  const name = $("discName").value.trim() || process.name.replace(/\.exe$/i, "");
+  const category = $("discCategory").value === "__new__" ? "未分类" : $("discCategory").value;
   try {
-    const r = await api(`/api/discover/${pid}/kill`, { method: "POST" });
-    toast(r.stopped ? `已关闭 ${name}` : `关闭 ${name} 失败（可能无权限或已退出）`, !r.stopped);
-    setTimeout(scanDiscover, 800);
-  } catch (e) { toast(e.message, true); }
+    const result = await runBusy($("btnSafeImport"), () => api(`/api/discover/${process.pid}/import`, { method: "POST", body: {
+      name, category, remark: $("discRemark").value.trim(), webUrl: $("discWebUrl").value.trim(), healthUrl: $("discHealthUrl").value.trim(),
+      healthKeyword: $("discHealthKeyword").value.trim(), watched: $("discWatched").checked
+    } }));
+    HANDOFF = { pid: process.pid, serviceId: result.serviceId, verified: result.verification && result.verification.online && (!result.verification.health || result.verification.health.ok) };
+    $("btnSafeImport").disabled = true;
+    await Promise.all([loadList(), loadHealth()]);
+    renderHandoffStatus(result);
+    toast(result.message, !HANDOFF.verified);
+  } catch (error) {
+    HANDOFF = null;
+    renderHandoffStatus({ message: error.message }, true);
+    toast(error.message, true);
+  }
+}
+function confirmOriginalHandoff() {
+  return new Promise((resolve) => {
+    $("confirmTitle").textContent = "确认关闭原进程";
+    $("confirmCopy").textContent = `PM2 替代服务已经验证通过。确认后将关闭原进程（PID ${HANDOFF.pid}），由 PM2 接管运行。`;
+    $("confirmExactName").style.display = "none";
+    $("confirmModalBg").style.display = "flex";
+    const finish = (approved) => {
+      $("confirmModalBg").style.display = "none";
+      $("btnConfirmAction").onclick = null;
+      $("btnCancelAction").onclick = null;
+      resolve(approved);
+    };
+    $("btnCancelAction").onclick = () => finish(false);
+    $("btnConfirmAction").onclick = () => finish(true);
+  });
+}
+async function completeHandoff() {
+  if (!HANDOFF || !HANDOFF.verified || !(await confirmOriginalHandoff())) return;
+  try {
+    await api(`/api/discover/${HANDOFF.pid}/handoff`, { method: "POST", body: { serviceId: HANDOFF.serviceId } });
+    toast("安全交接完成，原进程已关闭");
+    HANDOFF = null;
+    renderHandoffStatus({ completed: true, message: "原进程已关闭，后续由 PM2 托管运行。" });
+    await Promise.all([scanDiscover(), loadList(), loadHealth()]);
+  } catch (error) { toast(error.message, true); }
 }
 $("btnScan").onclick = scanDiscover;
+$("btnSafeImport").onclick = importSelectedProcess;
 $("btnClearDisc").onclick = () => { DISCOVER = []; $("inDiscoverFilter").value = ""; renderDiscover(); $("discoverInfo").textContent = ""; };
 $("inDiscoverFilter").oninput = renderDiscover;
 
