@@ -1,0 +1,11 @@
+{
+  "id": "workbench",
+  "name": "工作台",
+  "version": "1.0.0",
+  "description": "本地工作索引：工程、目录、文件、链接、账号文件与服务入口",
+  "icon": "🗂",
+  "apiPrefix": "/api/workbench",
+  "cardHtml": "card.html",
+  "script": "workbench.js",
+  "css": ["workbench.css"]
+}

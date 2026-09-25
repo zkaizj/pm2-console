@@ -978,7 +978,11 @@ function registerPluginServer(p) {
         express,
         path,
         fs,
-        TOKEN
+        TOKEN,
+        stateDir: STATE_DIR,
+        readJson,
+        writeJsonAtomically,
+        spawn
       });
       console.log(`[plugins] 已注册服务端: ${p.id}`);
       registeredPluginServers.add(p.id);
