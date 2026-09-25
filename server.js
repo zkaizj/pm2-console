@@ -398,13 +398,19 @@ let healthCache = {};        // name -> { ok, latencyMs, status, checkedAt }
 let prevPm2Status = {};      // name -> 上次 pm2 状态
 let alertLastAt = {};        // key -> 上次告警时间戳
 
-function sendAlert(text) {
+async function sendAlert(text) {
   const { webhookUrl, webhookType } = state.settings;
-  if (!state.settings.alertEnabled || !webhookUrl) return;
+  if (!state.settings.alertEnabled || !webhookUrl) return { ok: false, unavailable: true };
   let payload = { msgtype: "text", text: { content: text } };           // 企业微信 / 钉钉 / 通用
   if (webhookType === "feishu") payload = { msg_type: "text", content: { text } };
-  fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(6000) })
-    .catch((e) => console.error("[pm2-console] 告警发送失败:", e.message));
+  try {
+    const response = await fetch(webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(6000) });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return { ok: true };
+  } catch {
+    console.error("[pm2-console] 告警发送失败");
+    return { ok: false };
+  }
 }
 function alertThrottled(key) {
   const now = Date.now();
@@ -489,7 +495,12 @@ async function healthSweep() {
 setInterval(healthSweep, 20000);
 setTimeout(healthSweep, 3000);
 
-app.get("/api/settings", (req, res) => res.json({ settings: state.settings }));
+function publicSettings() {
+  const { webhookUrl, ...settings } = state.settings;
+  return Object.assign({}, settings, { webhookConfigured: Boolean(webhookUrl) });
+}
+
+app.get("/api/settings", (req, res) => res.json({ settings: publicSettings() }));
 app.post("/api/settings", (req, res) => {
   const b = req.body || {};
   ["webhookUrl", "webhookType", "alertEnabled", "alertCooldownMin", "healthCheckEnabled"].forEach((k) => { if (b[k] !== undefined) state.settings[k] = b[k]; });
@@ -497,7 +508,15 @@ app.post("/api/settings", (req, res) => {
   state.settings.alertEnabled = !!state.settings.alertEnabled;
   state.settings.healthCheckEnabled = !!state.settings.healthCheckEnabled;
   saveState();
-  res.json({ ok: true, settings: state.settings });
+  res.json({ ok: true, settings: publicSettings() });
+});
+app.post("/api/settings/test-alert", async (req, res) => {
+  if (!state.settings.alertEnabled || !state.settings.webhookUrl) {
+    return res.status(409).json({ error: "请先启用告警并配置 Webhook" });
+  }
+  const result = await sendAlert("PM2 中控台测试告警：本机通知通道可用。");
+  if (!result.ok) return res.status(502).json({ error: "测试告警发送失败，请检查 Webhook 配置" });
+  res.json({ ok: true, message: "测试告警已发送" });
 });
 app.get("/api/health", (req, res) => {
   withPm2(res, () => {
@@ -774,6 +793,9 @@ app.post("/api/discover/:pid/import", (req, res) => {
       const tokens = tokenizeCommand(process.CommandLine);
       const args = tokens.length > 1 ? tokens.slice(1) : [];
       const serviceName = (name && String(name).trim()) || path.basename(exe).replace(/\.exe$/i, "");
+      if (await findServiceIdByName(serviceName) !== null) {
+        return res.status(409).json({ error: `PM2 中已有同名服务「${serviceName}」，请换一个服务名称` });
+      }
       const started = await startDiscoveredProcess({
         name: serviceName, script: exe, args, cwd: (cwd && String(cwd).trim()) || path.dirname(exe),
         interpreter: "none", autorestart: true, max_restarts: 20, min_uptime: "2s", kill_timeout: 5000, windowsHide: true
@@ -781,12 +803,13 @@ app.post("/api/discover/:pid/import", (req, res) => {
       const serviceId = startedServiceId(started) || await findServiceIdByName(serviceName);
       if (serviceId === null) return res.status(500).json({ error: "PM2 已接收启动请求，但未能确定服务编号" });
       if (category && String(category).trim()) state.serviceCategory[serviceName] = String(category).trim();
-      state.serviceMeta[serviceName] = Object.assign({}, serviceMeta(serviceName), {
-        webUrl: String(webUrl || "").trim() || null,
-        remark: String(remark || "").trim() || null,
-        healthUrl: String(healthUrl || "").trim() || null,
-        healthKeyword: String(healthKeyword || "").trim() || null,
-        watched: Boolean(watched), desiredState: "running", ignoreUntil: null
+      const previous = serviceMeta(serviceName);
+      state.serviceMeta[serviceName] = Object.assign({}, previous, {
+        webUrl: webUrl === undefined ? previous.webUrl || null : String(webUrl || "").trim() || null,
+        remark: remark === undefined ? previous.remark || null : String(remark || "").trim() || null,
+        healthUrl: healthUrl === undefined ? previous.healthUrl || null : String(healthUrl || "").trim() || null,
+        healthKeyword: healthKeyword === undefined ? previous.healthKeyword || null : String(healthKeyword || "").trim() || null,
+        watched: watched === undefined ? Boolean(previous.watched) : Boolean(watched), desiredState: "running", ignoreUntil: null
       });
       const persistence = await persistManagedChange();
       const verification = await verifyManagedService(serviceId, serviceName);

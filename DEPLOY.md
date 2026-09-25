@@ -66,14 +66,15 @@ node server.js
 ```powershell
 npm install -g pm2        # 全局安装 PM2
 pm2 start server.js --name pm2-console
-pm2 save                  # 保存进程列表
-pm2 startup               # 按提示执行输出的一行命令，配置开机自启
+pm2 save                  # 保存进程列表与快照
 ```
 
 常用管理：`pm2 ls` / `pm2 logs pm2-console` / `pm2 restart pm2-console` / `pm2 save`
 
 > 注意：本机当前 PM2 家目录在 `D:\ai\dsh-workspace\.runtime\pm2`（`PM2_HOME` 环境变量）。
 > 新环境若不设置 PM2_HOME，默认在用户目录 `~/.pm2`，功能一致。
+>
+> Windows 不会因为 `pm2 save` 自动在登录后恢复服务。请额外配置启动文件夹快捷方式或计划任务，在登录时执行 `pm2 resurrect`；并确保它使用同一个 `PM2_HOME`。`pm2 save` + `pm2 resurrect` 才是完整的重启恢复链路。
 
 ---
 
@@ -129,6 +130,8 @@ $lnk.Save()
 | 插件启停 | 存 `data/state.json` 的 `pluginEnabledIds`；「🧩 插件管理」界面可操作 |
 | 令牌 | 环境变量 `CONSOLE_TOKEN`（见第三节） |
 | 健康检查/告警 | 侧边栏「🔔 告警设置」配置 webhook（企业微信/钉钉/飞书） |
+| 恢复保护 | 每次服务变更都会尝试保存 PM2 快照；网页“恢复保护”显示最近成功或失败状态 |
+| 工作台 | 数据保存在 `data/workbench.json`；账号文件只保存路径，控制台不会读取文件内容 |
 
 > `data/` 目录被 .gitignore 排除 —— 它保存的是**本机运行时状态**，不会随仓库同步，这样不同环境配置互不干扰。
 

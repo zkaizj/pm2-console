@@ -125,10 +125,6 @@
     <button class="nav-item" id="btnMoreTools">🧰 更多工具</button>
     <!-- 插件导航项由 loadPlugins() 动态注入 -->
   </div>
-  <div class="side-foot">
-    <button class="small" id="btnPlugins" style="width:100%;margin-bottom:6px">🧩 插件管理</button>
-    <button class="small" id="btnAlerts" style="width:100%">🔔 告警设置</button>
-  </div>
 </aside>
 <div class="main">
 <div id="errBanner" style="display:none;background:#3a1d1d;border:1px solid var(--red);color:#fca5a5;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px"></div>
@@ -297,12 +293,26 @@
   <div class="modal">
     <h3>🔔 告警设置</h3>
     <input type="text" id="alWebhook" placeholder="Webhook 地址（企业微信/钉钉/飞书机器人 URL）">
+    <div class="hint" id="alWebhookStatus" style="margin:0 0 8px"></div>
     <select id="alType"><option value="generic">企业微信 / 钉钉</option><option value="feishu">飞书</option></select>
     <div class="row" style="margin-bottom:8px"><label style="margin:0">启用告警</label><input type="checkbox" id="alEnabled" style="width:auto;flex:0 0 auto"></div>
     <div class="row" style="margin-bottom:8px"><label style="margin:0">启用健康巡检（20 秒一次）</label><input type="checkbox" id="alHealth" style="width:auto;flex:0 0 auto"></div>
     <input type="text" id="alCooldown" placeholder="冷却时间（分钟，默认 5，防刷屏）">
     <div class="hint">触发条件：① 服务状态异常（运行中 → 异常）② 健康检查失败（需在服务 ⚙️ 里配置健康检查地址）。</div>
-    <div class="row" style="margin-top:10px"><button class="primary small" id="btnSaveAlerts">保存</button><button class="small" id="btnCloseAlerts">关闭</button></div>
+    <div class="row" style="margin-top:10px"><button class="primary small" id="btnSaveAlerts">保存</button><button class="small" id="btnTestAlert">发送测试</button><button class="small" id="btnCloseAlerts">关闭</button></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="moreToolsModalBg">
+  <div class="modal">
+    <h3>🧰 更多工具</h3>
+    <div class="ops-list">
+      <div class="ops-item"><div class="content"><div class="title">项目发布</div><div class="detail">保留项目档案、部署历史和回滚能力。</div></div><div class="actions"><button class="small" id="btnMoreProjects">打开</button></div></div>
+      <div class="ops-item"><div class="content"><div class="title">扫描本机进程</div><div class="detail">通过安全交接方式拉入 PM2 管理。</div></div><div class="actions"><button class="small" id="btnMoreDiscovery">打开</button></div></div>
+      <div class="ops-item"><div class="content"><div class="title">告警设置</div><div class="detail">配置本机服务异常通知和发送测试。</div></div><div class="actions"><button class="small" id="btnAlerts">打开</button></div></div>
+      <div class="ops-item"><div class="content"><div class="title">插件管理</div><div class="detail">启用或停用扩展功能。</div></div><div class="actions"><button class="small" id="btnPlugins">打开</button></div></div>
+    </div>
+    <div class="row" style="margin-top:12px"><button class="small" id="btnCloseMoreTools">关闭</button></div>
   </div>
 </div>
 
@@ -1161,26 +1171,49 @@ async function loadSettingsUI() {
   try {
     const d = await api("/api/settings");
     const s = d.settings;
-    $("alWebhook").value = s.webhookUrl || "";
+    $("alWebhook").value = "";
+    $("alWebhook").placeholder = s.webhookConfigured ? "已配置（地址不显示；输入新地址可替换）" : "Webhook 地址（企业微信/钉钉/飞书机器人 URL）";
+    $("alWebhookStatus").textContent = s.webhookConfigured ? "已配置 Webhook，地址不会回显。" : "尚未配置 Webhook。";
     $("alType").value = s.webhookType || "generic";
     $("alEnabled").checked = !!s.alertEnabled;
     $("alHealth").checked = s.healthCheckEnabled !== false;
     $("alCooldown").value = s.alertCooldownMin || 5;
   } catch (e) { /* 静默 */ }
 }
-$("btnAlerts").onclick = async () => { await loadSettingsUI(); $("alertModalBg").style.display = "flex"; };
+async function openAlerts() {
+  await loadSettingsUI();
+  $("moreToolsModalBg").style.display = "none";
+  $("alertModalBg").style.display = "flex";
+}
+$("btnAlerts").onclick = openAlerts;
 $("btnCloseAlerts").onclick = () => { $("alertModalBg").style.display = "none"; };
 $("btnSaveAlerts").onclick = async () => {
   try {
-    await api("/api/settings", { method: "POST", body: {
-      webhookUrl: $("alWebhook").value.trim(), webhookType: $("alType").value,
+    const body = {
+      webhookType: $("alType").value,
       alertEnabled: $("alEnabled").checked, alertCooldownMin: Number($("alCooldown").value) || 5,
       healthCheckEnabled: $("alHealth").checked
-    } });
+    };
+    const webhookUrl = $("alWebhook").value.trim();
+    if (webhookUrl) body.webhookUrl = webhookUrl;
+    await api("/api/settings", { method: "POST", body });
     $("alertModalBg").style.display = "none";
     toast("告警设置已保存");
   } catch (e) { toast(e.message, true); }
 };
+$("btnTestAlert").onclick = async () => {
+  try {
+    const result = await runBusy($("btnTestAlert"), () => api("/api/settings/test-alert", { method: "POST", body: {} }));
+    toast(result.message || "测试告警已发送");
+  } catch (error) { toast(error.message, true); }
+};
+
+/* ---------- 更多工具 ---------- */
+function closeMoreTools() { $("moreToolsModalBg").style.display = "none"; }
+$("btnMoreTools").onclick = () => { $("moreToolsModalBg").style.display = "flex"; };
+$("btnCloseMoreTools").onclick = closeMoreTools;
+$("btnMoreProjects").onclick = () => { closeMoreTools(); showModule("card-projects"); };
+$("btnMoreDiscovery").onclick = () => { closeMoreTools(); showModule("card-discover"); };
 
 /* ---------- 插件系统（动态注入导航/卡片/脚本 + 管理弹窗） ---------- */
 let PLUGIN_LIST = [];
@@ -1220,8 +1253,11 @@ function loadPluginScript(p) {
     loadedPluginScripts.add(s);
     const el = document.createElement("script");
     el.src = `/plugins/${p.id}/${s}`;
-    document.body.appendChild(el);
-    proms.push(new Promise((res, rej) => { el.onload = res; el.onerror = () => rej(new Error(`脚本加载失败: ${s}`)); }));
+    proms.push(new Promise((res, rej) => {
+      el.onload = res;
+      el.onerror = () => rej(new Error(`脚本加载失败: ${s}`));
+      document.body.appendChild(el);
+    }));
   }
   return Promise.all(proms);
 }
@@ -1264,6 +1300,7 @@ async function loadPlugins() {
 
 /* 插件管理弹窗 */
 async function openPluginModal() {
+  closeMoreTools();
   const box = $("pluginList");
   box.innerHTML = "";
   for (const p of PLUGIN_LIST) {

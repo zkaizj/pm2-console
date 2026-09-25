@@ -5,6 +5,8 @@ const fs = require("node:fs");
 const frontend = fs.readFileSync("public/index.html", "utf8");
 const server = fs.readFileSync("server.js", "utf8");
 const desktopMain = fs.readFileSync("desktop/main.js", "utf8");
+const readme = fs.readFileSync("README.md", "utf8");
+const deployGuide = fs.readFileSync("DEPLOY.md", "utf8");
 
 test("web rendering does not interpolate escaped values into inline handlers", () => {
   assert.doesNotMatch(frontend, /onclick="[^"]*esc\(/i);
@@ -48,4 +50,20 @@ test("operations UI provides attention, recovery, and a safe service detail flow
   assert.match(frontend, /id="serviceDetailModalBg"/);
   assert.match(frontend, /function confirmServiceAction\(/);
   assert.match(frontend, /function runBusy\(/);
+});
+
+test("secondary tools, masked alert tests, and local-workflow docs remain available", () => {
+  assert.match(frontend, /更多工具/);
+  assert.match(frontend, /id="btnMoreProjects"/);
+  assert.match(frontend, /id="btnTestAlert"/);
+  assert.match(server, /app\.post\("\/api\/settings\/test-alert"/);
+  assert.match(server, /function publicSettings\(/);
+  assert.doesNotMatch(server, /res\.json\(\{ settings: state\.settings \}\)/);
+  assert.match(readme, /恢复保护/);
+  assert.match(readme, /工作台/);
+  assert.match(deployGuide, /pm2 resurrect/);
+});
+
+test("plugin scripts install load handlers before browser fetch begins", () => {
+  assert.match(frontend, /el\.onload = res;[\s\S]*document\.body\.appendChild\(el\)/);
 });
