@@ -1122,7 +1122,9 @@ function injectPluginNav(p) {
   btn.dataset.plugin = p.id;
   btn.textContent = `${p.icon} ${p.name}`;
   btn.onclick = () => showModule(btn.dataset.cards);
-  document.getElementById("navList").appendChild(btn);
+  const nav = document.getElementById("navList");
+  if (p.id === "workbench") nav.insertBefore(btn, nav.firstChild);
+  else nav.appendChild(btn);
 }
 
 async function loadPluginCard(p) {

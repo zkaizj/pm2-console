@@ -3,7 +3,7 @@
 const { normalizeWorkspace, normalizeItem, targetStatus, validateTarget } = require("../../lib/workbench");
 
 module.exports.register = function register(app, ctx) {
-  const { path, stateDir, readJson, writeJsonAtomically, spawn } = ctx;
+  const { path, fs, stateDir, readJson, writeJsonAtomically, spawn } = ctx;
   const file = path.join(stateDir, "workbench.json");
   let workbench = readJson(file, { version: 1, workspaces: [], items: [] });
   if (!Array.isArray(workbench.workspaces)) workbench.workspaces = [];
@@ -166,6 +166,26 @@ module.exports.register = function register(app, ctx) {
       res.json({ ok: true, opened: target.kind, item: publicItem(item) });
     } catch (error) {
       res.status(500).json({ error: "打开目标失败: " + error.message });
+    }
+  });
+
+  app.post("/api/workbench/items/:id/reveal", (req, res) => {
+    const item = itemById(req.params.id);
+    if (!item) return res.status(404).json({ error: "条目不存在" });
+    const target = targetStatus(item);
+    if (target.kind !== "missing" || !target.path) return res.status(400).json({ error: "仅可显示已失效的本地目标所在文件夹" });
+    const directory = path.dirname(target.path);
+    if (!fs.existsSync(directory)) return res.status(409).json({ error: "所在文件夹也已不存在" });
+    try {
+      const child = spawn("explorer.exe", [directory], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true
+      });
+      child.unref();
+      res.json({ ok: true, opened: "directory" });
+    } catch (error) {
+      res.status(500).json({ error: "打开所在文件夹失败: " + error.message });
     }
   });
 };

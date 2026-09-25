@@ -26,3 +26,16 @@ test("workbench server validates targets before opening them", () => {
   assert.doesNotMatch(source, /readFileSync\(item\.target/);
   assert.doesNotMatch(source, /exec\(/);
 });
+
+test("workbench UI exposes workspace, favorites, search, and safe open states", () => {
+  const card = fs.readFileSync("plugins/workbench/card.html", "utf8");
+  const script = fs.readFileSync("plugins/workbench/workbench.js", "utf8");
+  const server = fs.readFileSync("plugins/workbench/server.js", "utf8");
+  assert.match(card, /id="wbSpaces"/);
+  assert.match(card, /id="wbItems"/);
+  assert.match(card, /id="wbDetail"/);
+  assert.match(script, /function renderItems\(\)/);
+  assert.match(script, /function openItem\(/);
+  assert.match(script, /window\.workbenchPlugin/);
+  assert.match(server, /items\/:id\/reveal/);
+});
