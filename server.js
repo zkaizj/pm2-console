@@ -19,6 +19,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { readJson, writeJsonAtomically } = require("./lib/persistence");
+const { isAttentionRequired, shouldAlertHealth } = require("./lib/operations");
 
 const HOST = process.env.CONSOLE_HOST || "127.0.0.1";
 const PORT = Number(process.env.CONSOLE_PORT || 3090);
@@ -107,9 +108,14 @@ function humanBytes(b) {
   return `${b.toFixed(i === 0 ? 0 : 1)} ${u[i]}`;
 }
 
+function serviceMeta(name) {
+  return state.serviceMeta[name] || {};
+}
+
 function mapProcess(p) {
   const monit = p.monit || {};
   const env = p.pm2_env || {};
+  const meta = serviceMeta(p.name);
   return {
     id: p.pm_id,
     name: p.name,
@@ -124,10 +130,13 @@ function mapProcess(p) {
     cwd: env.pm_cwd || null,
     createdAt: env.created_at || null,
     category: state.serviceCategory[p.name] || "未分类",
-    webUrl: (state.serviceMeta[p.name] || {}).webUrl || null,
-    remark: (state.serviceMeta[p.name] || {}).remark || null,
-    healthUrl: (state.serviceMeta[p.name] || {}).healthUrl || null,
-    healthKeyword: (state.serviceMeta[p.name] || {}).healthKeyword || null
+    webUrl: meta.webUrl || null,
+    remark: meta.remark || null,
+    healthUrl: meta.healthUrl || null,
+    healthKeyword: meta.healthKeyword || null,
+    watched: Boolean(meta.watched),
+    desiredState: meta.desiredState || "running",
+    ignoreUntil: meta.ignoreUntil || null
   };
 }
 
@@ -297,6 +306,7 @@ app.post("/api/processes", (req, res) => {
   pm2.start(opts, async (err) => {
     if (err) return res.status(500).json({ error: err.message });
     if (category && String(category).trim()) state.serviceCategory[opts.name] = String(category).trim();
+    state.serviceMeta[opts.name] = Object.assign({}, serviceMeta(opts.name), { desiredState: "running", ignoreUntil: null });
     const persistence = await persistManagedChange();
     res.json({
       ok: true,
@@ -320,30 +330,64 @@ app.post("/api/processes/:id/action", (req, res) => {
   }[action];
   if (!fn) return res.status(400).json({ error: `未知操作: ${action}` });
   withPm2(res, () => {
-    fn(pid, async (err) => {
-      if (err) return res.status(500).json({ error: err.message });
-      const persistence = await persistManagedChange();
-      res.json({ ok: true, action, id: pid, recovery: persistence.recovery, recoveryWarning: persistence.ok ? null : persistence.error });
+    pm2.describe(pid, (describeError, data) => {
+      if (describeError) return res.status(500).json({ error: describeError.message });
+      const proc = Array.isArray(data) ? data[0] : data;
+      if (!proc) return res.status(404).json({ error: "进程不存在" });
+      fn(pid, async (err) => {
+        if (err) return res.status(500).json({ error: err.message });
+        if (action === "delete") {
+          delete state.serviceCategory[proc.name];
+          delete state.serviceMeta[proc.name];
+        } else {
+          state.serviceMeta[proc.name] = Object.assign({}, serviceMeta(proc.name), {
+            desiredState: action === "stop" ? "stopped" : "running",
+            ignoreUntil: null
+          });
+        }
+        const persistence = await persistManagedChange();
+        res.json({ ok: true, action, id: pid, name: proc.name, recovery: persistence.recovery, recoveryWarning: persistence.ok ? null : persistence.error });
+      });
     });
   });
 });
 
 // 修改服务的备注与前端页面地址（含健康检查配置）
 app.post("/api/processes/:id/meta", (req, res) => {
-  const { webUrl, remark, healthUrl, healthKeyword } = req.body || {};
+  const { webUrl, remark, healthUrl, healthKeyword, watched } = req.body || {};
   withPm2(res, () => {
     pm2.describe(Number(req.params.id), (err, data) => {
       if (err) return res.status(500).json({ error: err.message });
       const proc = Array.isArray(data) ? data[0] : data;
       if (!proc) return res.status(404).json({ error: "进程不存在" });
-      state.serviceMeta[proc.name] = {
+      const previous = serviceMeta(proc.name);
+      state.serviceMeta[proc.name] = Object.assign({}, previous, {
         webUrl: String(webUrl || "").trim() || null,
         remark: String(remark || "").trim() || null,
         healthUrl: String(healthUrl || "").trim() || null,
-        healthKeyword: String(healthKeyword || "").trim() || null
-      };
-      saveState();
+        healthKeyword: String(healthKeyword || "").trim() || null,
+        watched: watched === undefined ? Boolean(previous.watched) : Boolean(watched)
+      });
+      const saved = saveState();
+      if (!saved.ok) return res.status(500).json({ error: saved.error });
       res.json({ ok: true, name: proc.name, meta: state.serviceMeta[proc.name] });
+    });
+  });
+});
+
+app.post("/api/processes/:id/attention", (req, res) => {
+  const ignored = Boolean((req.body || {}).ignored);
+  withPm2(res, () => {
+    pm2.describe(Number(req.params.id), (err, data) => {
+      if (err) return res.status(500).json({ error: err.message });
+      const proc = Array.isArray(data) ? data[0] : data;
+      if (!proc) return res.status(404).json({ error: "进程不存在" });
+      state.serviceMeta[proc.name] = Object.assign({}, serviceMeta(proc.name), {
+        ignoreUntil: ignored ? new Date(Date.now() + 60 * 60 * 1000).toISOString() : null
+      });
+      const saved = saveState();
+      if (!saved.ok) return res.status(500).json({ error: saved.error });
+      res.json({ ok: true, name: proc.name, ignoreUntil: state.serviceMeta[proc.name].ignoreUntil });
     });
   });
 });
@@ -399,6 +443,20 @@ function probeUrl(url) {
     .then(async (r) => ({ ok: r.ok, status: r.status, latencyMs: Math.round(performance.now() - t0), body: await readResponseTextLimited(r, MAX_PROBE_BODY_BYTES) }))
     .catch((e) => ({ ok: false, status: 0, latencyMs: Math.round(performance.now() - t0), err: String(e.message || e) }));
 }
+async function checkServiceHealth(name, meta) {
+  if (!meta.healthUrl) return { ok: false, status: 0, latencyMs: 0, checkedAt: new Date().toISOString(), error: "未配置健康检查" };
+  const r = await probeUrl(meta.healthUrl);
+  const keywordMatched = !meta.healthKeyword || (r.body || "").includes(meta.healthKeyword);
+  const health = {
+    ok: r.ok && keywordMatched,
+    latencyMs: r.latencyMs,
+    status: r.status,
+    checkedAt: new Date().toISOString(),
+    error: r.err || (!r.ok ? `HTTP ${r.status || 0}` : (keywordMatched ? null : "响应未包含健康关键字"))
+  };
+  healthCache[name] = health;
+  return health;
+}
 /** 周期健康巡检：更新 healthCache，pm2 状态异常 & 健康失败时告警 */
 async function healthSweep() {
   if (!pm2Connected) return;
@@ -419,14 +477,11 @@ async function healthSweep() {
     if (!state.settings.healthCheckEnabled) return;
     procs.forEach((p) => {
       const name = p.name;
-      const meta = state.serviceMeta[name] || {};
+      const meta = serviceMeta(name);
       if (!meta.healthUrl) return;
-      probeUrl(meta.healthUrl).then((r) => {
-        const ok = r.ok && (!meta.healthKeyword || (r.body || "").includes(meta.healthKeyword));
-        const prev = healthCache[name];
-        healthCache[name] = { ok, latencyMs: r.latencyMs, status: r.status, checkedAt: new Date().toISOString() };
-        const wasOk = prev === undefined ? true : prev.ok;
-        if (!ok && wasOk && state.settings.alertEnabled && alertThrottled("health:" + name)) sendAlert(`🚨 健康检查失败：${name}（${meta.healthUrl}）`);
+      const previous = healthCache[name];
+      checkServiceHealth(name, meta).then((health) => {
+        if (shouldAlertHealth(previous, health) && state.settings.alertEnabled && alertThrottled("health:" + name)) sendAlert(`🚨 健康检查失败：${name}（${meta.healthUrl}）`);
       });
     });
   });
@@ -448,16 +503,40 @@ app.get("/api/health", (req, res) => {
   withPm2(res, () => {
     pm2.list((err, list) => {
       if (err) return res.status(500).json({ error: err.message });
-      const services = (list || []).map((p) => ({
+      const services = (list || []).map((p) => {
+        const meta = serviceMeta(p.name);
+        return {
         name: p.name,
         status: p.pm2_env ? p.pm2_env.status : p.status,
         category: state.serviceCategory[p.name] || "未分类",
-        webUrl: (state.serviceMeta[p.name] || {}).webUrl || null,
+        webUrl: meta.webUrl || null,
         health: state.settings.healthCheckEnabled ? (healthCache[p.name] || null) : null,
-        hasHealth: !!(state.serviceMeta[p.name] || {}).healthUrl
-      }));
+        hasHealth: !!meta.healthUrl,
+        watched: Boolean(meta.watched),
+        desiredState: meta.desiredState || "running",
+        ignoreUntil: meta.ignoreUntil || null
+      };
+      });
       const summary = { total: services.length, online: services.filter((s) => s.status === "online").length, unhealthy: state.settings.healthCheckEnabled ? services.filter((s) => s.hasHealth && s.health && !s.health.ok).length : 0 };
-      res.json({ enabled: state.settings.healthCheckEnabled, summary, services });
+      const attention = services.filter((service) => isAttentionRequired(service)).map((service) => ({
+        name: service.name,
+        status: service.status,
+        health: service.health,
+        reason: service.health && !service.health.ok ? service.health.error || "健康检查失败" : `服务状态为 ${service.status}`
+      }));
+      res.json({ enabled: state.settings.healthCheckEnabled, summary, services, attention });
+    });
+  });
+});
+
+app.post("/api/processes/:id/health-check", (req, res) => {
+  withPm2(res, () => {
+    pm2.describe(Number(req.params.id), async (err, data) => {
+      if (err) return res.status(500).json({ error: err.message });
+      const proc = Array.isArray(data) ? data[0] : data;
+      if (!proc) return res.status(404).json({ error: "进程不存在" });
+      const health = await checkServiceHealth(proc.name, serviceMeta(proc.name));
+      res.json({ ok: health.ok, health });
     });
   });
 });
