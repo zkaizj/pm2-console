@@ -41,3 +41,11 @@ test("managed process changes save a PM2 recovery snapshot", () => {
   assert.match(server, /app\.get\("\/api\/recovery"/);
   assert.match(server, /app\.post\("\/api\/recovery\/save"/);
 });
+
+test("operations UI provides attention, recovery, and a safe service detail flow", () => {
+  assert.match(frontend, /id="attentionList"/);
+  assert.match(frontend, /id="recoveryStatus"/);
+  assert.match(frontend, /id="serviceDetailModalBg"/);
+  assert.match(frontend, /function confirmServiceAction\(/);
+  assert.match(frontend, /function runBusy\(/);
+});

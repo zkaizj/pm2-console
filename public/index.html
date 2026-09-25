@@ -89,17 +89,40 @@
   .dep-step.done{color:var(--green)}
   .dep-step.fail{color:var(--red)}
   #projModalBg .modal input,#projModalBg .modal select{width:100%;margin-bottom:8px}
+  .ops-summary{display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:10px;margin-bottom:18px}
+  .ops-stat,.ops-item{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:12px}
+  .ops-stat .label,.ops-item .label{color:var(--muted);font-size:12px}
+  .ops-stat .value{font-size:22px;font-weight:600;margin-top:2px}
+  .ops-section{border-top:1px solid var(--border);padding-top:14px;margin-top:14px}
+  .ops-section h2{margin-bottom:8px}
+  .ops-list{display:grid;gap:8px}
+  .ops-item{display:flex;align-items:center;gap:12px;justify-content:space-between}
+  .ops-item .content{min-width:0;flex:1}
+  .ops-item .title{font-weight:600;word-break:break-all}
+  .ops-item .detail{color:var(--muted);font-size:12px;margin-top:2px;word-break:break-all}
+  .ops-item .actions{flex-wrap:wrap;justify-content:flex-end}
+  .service-tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--border);padding-bottom:10px;margin-bottom:12px}
+  .service-tabs button.active{background:var(--accent);border-color:var(--accent);color:#fff}
+  .service-detail-body{min-height:130px}
+  .confirm-copy{color:var(--muted);font-size:13px;margin-bottom:10px;white-space:pre-wrap}
+  @media(max-width:900px){
+    .ops-summary{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .ops-item{align-items:flex-start;flex-direction:column}
+    .ops-item .actions{justify-content:flex-start}
+    .service-wide{display:none}
+    .sidebar{width:164px;flex-basis:164px}
+    .main{padding:12px}
+  }
 </style></head>
 <body>
 <div class="layout">
 <aside class="sidebar">
   <div class="brand"><span class="dot" id="dshDot"></span>PM2 中控台 <span class="muted" id="connInfo" style="font-size:11px"></span></div>
   <div class="nav" id="navList">
-    <button class="nav-item" data-cards="card-overview">🏥 总览</button>
+    <button class="nav-item" data-cards="card-overview">🏥 运维总览</button>
     <button class="nav-item" data-cards="card-pullin,card-services">📋 服务</button>
-    <button class="nav-item" data-cards="card-projects">📦 项目</button>
-    <button class="nav-item" data-cards="card-discover">🔍 进程</button>
     <button class="nav-item" data-cards="card-logsearch">🔎 日志</button>
+    <button class="nav-item" id="btnMoreTools">🧰 更多工具</button>
     <!-- 插件导航项由 loadPlugins() 动态注入 -->
   </div>
   <div class="side-foot">
@@ -114,8 +137,11 @@
 <div class="chips" id="chips"></div>
 
 <div class="card" id="card-overview" data-module="1">
-  <h2>🏥 服务总览 <span class="muted" id="ovInfo"></span></h2>
-  <div id="ovBody"><div class="empty">加载中…</div></div>
+  <h2>🏥 运维总览 <span class="muted" id="ovInfo"></span></h2>
+  <div class="ops-summary" id="opsSummary"><div class="empty">加载中…</div></div>
+  <section class="ops-section"><h2>待处理</h2><div id="attentionList"><div class="empty">加载中…</div></div></section>
+  <section class="ops-section"><h2>关注服务</h2><div id="watchedList"><div class="empty">加载中…</div></div></section>
+  <section class="ops-section"><h2>恢复保护</h2><div id="recoveryStatus"><div class="empty">加载中…</div></div></section>
 </div>
 
 <div class="card" id="card-pullin" data-module="1">
@@ -175,7 +201,7 @@
 <div class="card" id="card-services" data-module="1">
   <h2>📋 托管中的服务 <span class="muted" id="countInfo"></span></h2>  <div class="table-wrap">
     <table>
-      <thead><tr><th>名称</th><th>分类</th><th>状态</th><th>重启</th><th>运行时长</th><th>CPU</th><th>内存</th><th>启动时间</th><th>操作</th><th>日志</th><th>监控</th><th>页面</th></tr></thead>
+      <thead><tr><th>名称</th><th>分类</th><th>状态</th><th>重启</th><th class="service-wide">运行时长</th><th class="service-wide">CPU</th><th class="service-wide">内存</th><th class="service-wide">启动时间</th><th>操作</th><th>日志</th><th>监控</th><th>页面</th></tr></thead>
       <tbody id="tbody"><tr><td colspan="12" class="empty">加载中…</td></tr></tbody>
     </table>
   </div>
@@ -279,7 +305,33 @@
     <input type="text" id="metaRemark" placeholder="备注（如：管理后台 / 端口 8080）">
     <input type="text" id="metaHealth" placeholder="健康检查地址（如 http://127.0.0.1:8080/health，总览与告警用）">
     <input type="text" id="metaHealthKw" placeholder="健康关键字（可选，响应须包含，如 ok）">
+    <div class="row" style="margin:8px 0"><label style="margin:0">关注此服务</label><input type="checkbox" id="metaWatched" style="width:auto;flex:0 0 auto"><span class="hint" style="margin:0">在运维总览中持续显示</span></div>
     <div class="row"><button class="primary small" id="btnSaveMeta">保存</button><button class="small" id="btnCloseMeta">关闭</button></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="serviceDetailModalBg">
+  <div class="modal" style="width:760px;max-width:94vw">
+    <div class="log-head">
+      <h3 style="margin:0">服务详情：<span id="serviceDetailTitle" class="mono"></span></h3>
+      <button class="small" id="btnCloseServiceDetail">关闭</button>
+    </div>
+    <div class="service-tabs" id="serviceDetailTabs">
+      <button class="small active" data-service-tab="status">状态与操作</button>
+      <button class="small" data-service-tab="logs">日志</button>
+      <button class="small" data-service-tab="monitor">监控</button>
+      <button class="small" data-service-tab="config">配置</button>
+    </div>
+    <div class="service-detail-body" id="serviceDetailBody"></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="confirmModalBg">
+  <div class="modal">
+    <h3 id="confirmTitle">确认操作</h3>
+    <div class="confirm-copy" id="confirmCopy"></div>
+    <input type="text" id="confirmExactName" style="display:none" autocomplete="off">
+    <div class="row" style="margin-top:12px"><button class="primary small" id="btnConfirmAction">确认</button><button class="small" id="btnCancelAction">取消</button></div>
   </div>
 </div>
 
@@ -454,7 +506,10 @@ async function loadList() {
   } catch (e) {
     const dot = $("dshDot"); if (dot) dot.className = "dot";
     const ci = $("connInfo"); if (ci) ci.textContent = "· 连接失败";
-    const tb = $("tbody"); if (tb) tb.innerHTML = `<tr><td colspan="12" class="empty">${esc(e.message)}</td></tr>`;
+    const count = $("countInfo"); if (count) count.textContent = `（刷新失败：${e.message}）`;
+    if (!ALL.length) {
+      const tb = $("tbody"); if (tb) tb.innerHTML = `<tr><td colspan="12" class="empty">${esc(e.message)}</td></tr>`;
+    }
     showBanner("服务列表加载失败：" + e.message);
   }
   fillLsService();
@@ -474,15 +529,16 @@ function renderList() {
         <td><select class="cat-select" onchange="setCat(${p.id}, this.value)">${catOptions.replace(`value="${esc(p.category||"未分类")}"`, `value="${esc(p.category||"未分类")}" selected`)}</select></td>
         <td><span class="status ${SCLASS[p.status]||"st-unknown"}"><i></i>${SZH[p.status]||p.status}</span></td>
         <td class="mono">${p.restartCount}</td>
-        <td class="mono">${fmtUptime(p.uptimeMs)}</td>
-        <td class="mono">${fmtCpu(p.cpu)}</td>
-        <td class="mono">${fmtBytes(p.memory)}</td>
-        <td class="mono muted">${p.createdAt ? new Date(p.createdAt).toLocaleString() : "-"}</td>
+        <td class="mono service-wide">${fmtUptime(p.uptimeMs)}</td>
+        <td class="mono service-wide">${fmtCpu(p.cpu)}</td>
+        <td class="mono service-wide">${fmtBytes(p.memory)}</td>
+        <td class="mono muted service-wide">${p.createdAt ? new Date(p.createdAt).toLocaleString() : "-"}</td>
         <td><div class="actions">
-          ${p.status !== "online" ? `<button class="small" onclick="doAction(${p.id},'start')">▶ 启动</button>` : ""}
-          ${p.status === "online" ? `<button class="small" onclick="doAction(${p.id},'stop')">⏹ 停止</button>` : ""}
-          <button class="small" onclick="doAction(${p.id},'restart')">🔄 重启</button>
-          <button class="small danger" onclick="doAction(${p.id},'delete')">🗑 删除</button>
+          <button class="small primary" onclick="openServiceDetail(${p.id})">详情</button>
+          ${p.status !== "online" ? `<button class="small" onclick="doAction(${p.id},'start',this)">▶ 启动</button>` : ""}
+          ${p.status === "online" ? `<button class="small" onclick="doAction(${p.id},'stop',this)">⏹ 停止</button>` : ""}
+          <button class="small" onclick="doAction(${p.id},'restart',this)">🔄 重启</button>
+          <button class="small danger" onclick="doAction(${p.id},'delete',this)">🗑 删除</button>
         </div></td>
         <td><button class="small" onclick="showLog(${jsAttr(p.name)},${p.id})">📜 日志</button></td>
         <td><button class="small" onclick="showMon(${jsAttr(p.name)},${p.id})">📈 监控</button></td>
@@ -503,9 +559,52 @@ async function setCat(id, cat) {
   try { const r = await api(`/api/processes/${id}/category`, { method: "POST", body: { category: cat } }); toast(`「${r.name}」已归入「${cat}」`); await loadList(); }
   catch (e) { toast(e.message, true); loadList(); }
 }
-async function doAction(id, action) {
-  try { const r = await api(`/api/processes/${id}/action`, { method: "POST", body: { action } }); toast(`${action==="delete"?"已删除":"操作成功"}：${r.id}`); setTimeout(loadList, 700); }
-  catch (e) { toast(e.message, true); }
+async function runBusy(button, action) {
+  if (!button) return action();
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "处理中…";
+  try { return await action(); }
+  finally { button.disabled = false; button.textContent = original; }
+}
+function confirmServiceAction(service, action) {
+  return new Promise((resolve) => {
+    const exact = action === "delete";
+    const labels = { stop: "停止", restart: "重启", delete: "删除" };
+    $("confirmTitle").textContent = `确认${labels[action] || action}服务`;
+    $("confirmCopy").textContent = exact
+      ? `删除「${service.name}」会移出 PM2 管理并清除本机的服务配置。请输入完整服务名确认。`
+      : `${labels[action] || action}「${service.name}」会影响正在使用它的本机服务。请确认继续。`;
+    const field = $("confirmExactName");
+    field.value = "";
+    field.placeholder = exact ? `请输入 ${service.name}` : "";
+    field.style.display = exact ? "block" : "none";
+    $("confirmModalBg").style.display = "flex";
+    const finish = (approved) => {
+      $("confirmModalBg").style.display = "none";
+      $("btnConfirmAction").onclick = null;
+      $("btnCancelAction").onclick = null;
+      resolve(approved);
+    };
+    $("btnCancelAction").onclick = () => finish(false);
+    $("btnConfirmAction").onclick = () => {
+      if (exact && field.value.trim() !== service.name) return toast("服务名不匹配，未执行删除", true);
+      finish(true);
+    };
+    if (exact) field.focus();
+  });
+}
+async function doAction(id, action, button) {
+  const service = ALL.find((p) => p.id === id);
+  if (!service) return toast("服务已不存在，请刷新列表", true);
+  if (["stop", "restart", "delete"].includes(action) && !(await confirmServiceAction(service, action))) return;
+  try {
+    const r = await runBusy(button, () => api(`/api/processes/${id}/action`, { method: "POST", body: { action } }));
+    toast(`${action === "delete" ? "已删除" : "操作成功"}：${r.id}`);
+    await Promise.all([loadList(), loadHealth()]);
+    if (action === "delete") closeServiceDetail();
+    else openServiceDetail(id, currentServiceTab);
+  } catch (e) { toast(e.message, true); }
 }
 
 /* ---------- 日志（弹窗） ---------- */
@@ -526,6 +625,96 @@ async function refreshLog() {
 }
 $("btnRefreshLog").onclick = refreshLog;
 $("btnCloseLog").onclick = () => { $("logModalBg").style.display = "none"; logProcId = null; };
+
+/* ---------- 统一服务详情 ---------- */
+let currentServiceId = null, currentServiceTab = "status";
+function closeServiceDetail() {
+  currentServiceId = null;
+  $("serviceDetailModalBg").style.display = "none";
+}
+function serviceHealth(name) {
+  return (HEALTH && HEALTH.services || []).find((service) => service.name === name) || null;
+}
+function openServiceDetail(id, tab = "status") {
+  currentServiceId = Number(id);
+  currentServiceTab = tab;
+  const service = ALL.find((item) => item.id === currentServiceId);
+  if (!service) return toast("服务已不存在，请刷新列表", true);
+  $("serviceDetailTitle").textContent = service.name;
+  $("serviceDetailModalBg").style.display = "flex";
+  renderServiceDetail();
+}
+function showServiceDetailTab(tab) {
+  currentServiceTab = tab;
+  renderServiceDetail();
+}
+function renderServiceDetail() {
+  const service = ALL.find((item) => item.id === currentServiceId);
+  if (!service) return closeServiceDetail();
+  document.querySelectorAll("[data-service-tab]").forEach((button) => button.classList.toggle("active", button.dataset.serviceTab === currentServiceTab));
+  const healthService = serviceHealth(service.name);
+  const health = healthService && healthService.health;
+  const healthText = !service.healthUrl ? "未配置健康检查" : !health ? "尚未检测" : health.ok ? `正常 · ${health.latencyMs}ms` : `异常 · ${health.error || "检查失败"}`;
+  const body = $("serviceDetailBody");
+  if (currentServiceTab === "logs") {
+    body.innerHTML = `<div class="ops-item"><div class="content"><div class="title">查看运行日志</div><div class="detail">直接查看最近日志，或跳转到日志搜索并预填异常关键字。</div></div><div class="actions"><button class="small primary" onclick="showLog(${jsAttr(service.name)},${service.id})">打开日志</button><button class="small" onclick="openLogForService(${service.id},'error')">搜索异常</button></div></div>`;
+    return;
+  }
+  if (currentServiceTab === "monitor") {
+    body.innerHTML = `<div class="ops-item"><div class="content"><div class="title">资源监控</div><div class="detail">CPU ${fmtCpu(service.cpu)} · 内存 ${fmtBytes(service.memory)} · 重启 ${service.restartCount} 次</div></div><div class="actions"><button class="small primary" onclick="showMon(${jsAttr(service.name)},${service.id})">打开实时监控</button></div></div>`;
+    return;
+  }
+  if (currentServiceTab === "config") {
+    body.innerHTML = `<div class="ops-list">
+      <div class="ops-item"><div class="content"><div class="title">关注服务</div><div class="detail">关注后始终显示在运维总览，便于日常查看。</div></div><div class="actions"><button class="small ${service.watched ? "primary" : ""}" onclick="toggleWatched(${service.id},${!service.watched},this)">${service.watched ? "已关注" : "加入关注"}</button></div></div>
+      <div class="ops-item"><div class="content"><div class="title">健康检查</div><div class="detail" id="serviceHealthResult">${esc(healthText)}</div></div><div class="actions"><button class="small" onclick="checkServiceHealth(${service.id},this)">立即检测</button></div></div>
+      <div class="ops-item"><div class="content"><div class="title">服务配置</div><div class="detail">页面地址、备注、健康检查地址和关键字。</div></div><div class="actions"><button class="small" onclick="editMeta(${jsAttr(service.name)},${service.id})">编辑配置</button></div></div>
+    </div>`;
+    return;
+  }
+  body.innerHTML = `<div class="ops-list">
+    <div class="ops-item"><div class="content"><div class="title"><span class="status ${SCLASS[service.status] || "st-unknown"}"><i></i>${SZH[service.status] || service.status}</span></div><div class="detail">重启 ${service.restartCount} 次 · 已运行 ${fmtUptime(service.uptimeMs)} · 健康检查：${esc(healthText)}</div></div><div class="actions">${service.webUrl ? `<button class="small" onclick="openUrl(${jsAttr(service.webUrl)})">打开页面</button>` : ""}</div></div>
+    <div class="ops-item"><div class="content"><div class="title">服务操作</div><div class="detail">停止、重启和删除都会要求确认；删除还需要输入完整服务名。</div></div><div class="actions">
+      ${service.status !== "online" ? `<button class="small primary" onclick="doAction(${service.id},'start',this)">启动</button>` : ""}
+      ${service.status === "online" ? `<button class="small" onclick="doAction(${service.id},'stop',this)">停止</button>` : ""}
+      <button class="small" onclick="doAction(${service.id},'restart',this)">重启</button><button class="small danger" onclick="doAction(${service.id},'delete',this)">删除</button>
+    </div></div>
+  </div>`;
+}
+async function checkServiceHealth(id, button) {
+  try {
+    const result = await runBusy(button, () => api(`/api/processes/${id}/health-check`, { method: "POST", body: {} }));
+    await loadHealth();
+    const target = $("serviceHealthResult");
+    if (target) target.textContent = result.health.ok ? `正常 · ${result.health.latencyMs}ms` : `异常 · ${result.health.error || "检查失败"}`;
+    toast(result.health.ok ? "健康检查正常" : "健康检查异常", !result.health.ok);
+  } catch (error) { toast(error.message, true); }
+}
+async function toggleWatched(id, watched, button) {
+  const service = ALL.find((item) => item.id === id);
+  if (!service) return toast("服务已不存在，请刷新列表", true);
+  try {
+    await runBusy(button, () => api(`/api/processes/${id}/meta`, { method: "POST", body: {
+      webUrl: service.webUrl || "", remark: service.remark || "", healthUrl: service.healthUrl || "",
+      healthKeyword: service.healthKeyword || "", watched
+    } }));
+    await Promise.all([loadList(), loadHealth()]);
+    openServiceDetail(id, "config");
+    toast(watched ? "已加入关注" : "已取消关注");
+  } catch (error) { toast(error.message, true); }
+}
+function openLogForService(id, query = "") {
+  const service = ALL.find((item) => item.id === Number(id));
+  if (!service) return toast("服务已不存在，请刷新列表", true);
+  $("lsService").value = service.name;
+  $("lsQ").value = query;
+  showModule("card-logsearch");
+  if (query) doLogSearch();
+}
+$("btnCloseServiceDetail").onclick = closeServiceDetail;
+$("serviceDetailTabs").querySelectorAll("button").forEach((button) => { button.onclick = () => showServiceDetailTab(button.dataset.serviceTab); });
+window.openServiceDetail = openServiceDetail;
+window.getManagedServices = () => ALL;
 
 /* ---------- 监控（实时曲线） ---------- */
 function drawSpark(cv, series, opts) {
@@ -757,7 +946,7 @@ function showModule(cardsStr) {
   if (chips) chips.style.display = (ids.includes("card-overview") || ids.includes("card-services")) ? "" : "none";
   localStorage.setItem(NAV_KEY, cardsStr);
 }
-document.querySelectorAll(".nav-item").forEach((b) => { b.onclick = () => showModule(b.dataset.cards); });
+document.querySelectorAll(".nav-item").forEach((b) => { if (b.dataset.cards) b.onclick = () => showModule(b.dataset.cards); });
 
 /* ---------- 服务备注与页面 ---------- */
 let metaProc = null;
@@ -770,6 +959,7 @@ function editMeta(name, id) {
   $("metaRemark").value = (p && p.remark) || "";
   $("metaHealth").value = (p && p.healthUrl) || "";
   $("metaHealthKw").value = (p && p.healthKeyword) || "";
+  $("metaWatched").checked = Boolean(p && p.watched);
   $("metaModalBg").style.display = "flex";
 }
 $("btnSaveMeta").onclick = async () => {
@@ -777,56 +967,107 @@ $("btnSaveMeta").onclick = async () => {
   try {
     await api(`/api/processes/${metaProc.id}/meta`, { method: "POST", body: {
       webUrl: $("metaUrl").value.trim(), remark: $("metaRemark").value.trim(),
-      healthUrl: $("metaHealth").value.trim(), healthKeyword: $("metaHealthKw").value.trim()
+      healthUrl: $("metaHealth").value.trim(), healthKeyword: $("metaHealthKw").value.trim(),
+      watched: $("metaWatched").checked
     } });
     $("metaModalBg").style.display = "none";
     await loadList(); await loadHealth();
+    if (currentServiceId === metaProc.id) openServiceDetail(metaProc.id, "config");
     toast("已保存");
   } catch (e) { toast(e.message, true); }
 };
 $("btnCloseMeta").onclick = () => { $("metaModalBg").style.display = "none"; };
 
-/* ---------- 服务总览（健康检查） ---------- */
-let HEALTH = null;
+/* ---------- 运维总览、待处理与恢复保护 ---------- */
+let HEALTH = null, RECOVERY = null;
 async function loadHealth() {
   try {
-    const d = await api("/api/health");
-    HEALTH = d;
+    const data = await api("/api/health");
+    HEALTH = data;
     renderHealth();
-  } catch (e) { $("ovInfo").textContent = "总览加载失败"; }
+  } catch (error) {
+    $("ovInfo").textContent = `总览加载失败：${error.message}`;
+    showBanner("运维总览加载失败：" + error.message);
+  }
+  await loadRecovery();
 }
-/** 纯本地渲染（不请求接口）——分类切换即时生效 */
+async function loadRecovery() {
+  try {
+    const data = await api("/api/recovery");
+    RECOVERY = data.recovery || null;
+    renderRecovery();
+  } catch (error) {
+    $("recoveryStatus").innerHTML = `<div class="ops-item"><div class="content"><div class="title">恢复状态暂不可用</div><div class="detail">${esc(error.message)}</div></div></div>`;
+  }
+}
 function renderHealth() {
   if (!HEALTH) return;
-  const d = HEALTH;
-  const all = d.services || [];
-  const services = FILTER === "全部" ? all : all.filter((s) => (s.category || "未分类") === FILTER);
-  const s = {
+  const all = HEALTH.services || [];
+  const services = FILTER === "全部" ? all : all.filter((service) => (service.category || "未分类") === FILTER);
+  const summary = {
     total: services.length,
-    online: services.filter((x) => x.status === "online").length,
-    unhealthy: services.filter((x) => x.hasHealth && x.health && !x.health.ok).length
+    online: services.filter((service) => service.status === "online").length,
+    abnormal: services.filter((service) => service.status === "errored" || service.status === "error").length,
+    stopped: services.filter((service) => service.status === "stopped").length,
+    unmonitored: services.filter((service) => !service.hasHealth).length
   };
-  if (d.enabled === false) {
-    $("ovInfo").textContent = "健康检查已关闭";
-    $("ovBody").innerHTML = `<div class="empty">健康检查已关闭 —— 需要时点侧边栏「🔔 告警设置」勾选「启用健康巡检」。</div>`;
+  $("ovInfo").textContent = HEALTH.enabled === false ? "健康巡检已关闭" : `共 ${summary.total} 个服务`;
+  $("opsSummary").innerHTML = [
+    ["运行中", summary.online, "st-online"], ["异常", summary.abnormal, "st-errored"],
+    ["已停止", summary.stopped, "st-stopped"], ["未配置健康检查", summary.unmonitored, "st-unknown"]
+  ].map(([label, value, style]) => `<div class="ops-stat"><div class="label"><span class="status ${style}"><i></i>${label}</span></div><div class="value">${value}</div></div>`).join("");
+  renderAttention(services);
+  renderWatchedServices(services);
+}
+function renderAttention(services) {
+  const visibleNames = new Set(services.map((service) => service.name));
+  const attention = (HEALTH.attention || []).filter((item) => visibleNames.has(item.name));
+  if (!attention.length) {
+    $("attentionList").innerHTML = `<div class="empty">${HEALTH.enabled === false ? "健康巡检已关闭；服务状态仍会显示在这里。" : "当前没有需要处理的服务"}</div>`;
     return;
   }
-  $("ovInfo").textContent = `共 ${s.total} · 在线 ${s.online} · 健康异常 ${s.unhealthy}`;
-  if (!services.length) { $("ovBody").innerHTML = '<div class="empty">该分类下暂无服务</div>'; return; }
-  $("ovBody").innerHTML = `<table><thead><tr><th>服务</th><th>PM2 状态</th><th>健康检查</th><th>延迟</th><th>页面</th></tr></thead><tbody>`
-    + services.map((x) => {
-        const h = x.health;
-        const hc = x.hasHealth
-          ? (h ? `<span class="status ${h.ok ? "st-online" : "st-errored"}"><i></i>${h.ok ? "正常" : "异常"}</span>` : '<span class="muted">检测中…</span>')
-          : '<span class="muted">未配置</span>';
-        const lat = x.hasHealth && h ? `${h.latencyMs}ms` : "-";
-        return `<tr>
-          <td><b>${esc(x.name)}</b></td>
-          <td><span class="status ${SCLASS[x.status] || "st-unknown"}"><i></i>${SZH[x.status] || x.status}</span></td>
-          <td>${hc}</td><td class="mono muted">${lat}</td>
-          <td>${x.webUrl ? `<button class="small" onclick="openUrl(${jsAttr(x.webUrl)})">🌐</button>` : "-"}</td>
-        </tr>`;
-      }).join("") + "</tbody></table>";
+  $("attentionList").innerHTML = `<div class="ops-list">${attention.map((item) => {
+    const service = ALL.find((candidate) => candidate.name === item.name);
+    if (!service) return "";
+    const checkedAt = item.health && item.health.checkedAt ? ` · 上次检查 ${new Date(item.health.checkedAt).toLocaleString()}` : "";
+    return `<div class="ops-item"><div class="content"><div class="title">${esc(item.name)} <span class="status ${SCLASS[item.status] || "st-unknown"}"><i></i>${SZH[item.status] || item.status}</span></div><div class="detail">${esc(item.reason)} · 重启 ${service.restartCount} 次${checkedAt}</div></div><div class="actions"><button class="small" onclick="openLogForService(${service.id},'error')">查看日志</button><button class="small" onclick="doAction(${service.id},'restart',this)">重启</button><button class="small" onclick="ignoreAttention(${service.id},this)">忽略本次</button></div></div>`;
+  }).join("")}</div>`;
+}
+function renderWatchedServices(services) {
+  const watched = services.filter((service) => service.watched);
+  if (!watched.length) {
+    $("watchedList").innerHTML = '<div class="empty">暂无关注服务；在服务详情的「配置」中可加入关注。</div>';
+    return;
+  }
+  $("watchedList").innerHTML = `<div class="ops-list">${watched.map((service) => {
+    const detail = service.health ? (service.health.ok ? `健康正常 · ${service.health.latencyMs}ms` : `健康异常 · ${service.health.error || "检查失败"}`) : service.hasHealth ? "等待检查" : "未配置健康检查";
+    const process = ALL.find((item) => item.name === service.name);
+    return `<div class="ops-item"><div class="content"><div class="title">${esc(service.name)} <span class="status ${SCLASS[service.status] || "st-unknown"}"><i></i>${SZH[service.status] || service.status}</span></div><div class="detail">${esc(detail)}</div></div><div class="actions">${process ? `<button class="small primary" onclick="openServiceDetail(${process.id})">详情</button>` : ""}</div></div>`;
+  }).join("")}</div>`;
+}
+async function ignoreAttention(id, button) {
+  try {
+    await runBusy(button, () => api(`/api/processes/${id}/attention`, { method: "POST", body: { ignored: true } }));
+    await loadHealth();
+    toast("已忽略一小时；服务不会被停止");
+  } catch (error) { toast(error.message, true); }
+}
+function renderRecovery() {
+  if (!RECOVERY) return;
+  const hasError = Boolean(RECOVERY.lastSnapshotError);
+  const title = hasError ? "最近一次 PM2 恢复快照失败" : "PM2 恢复快照受保护";
+  const detail = hasError
+    ? RECOVERY.lastSnapshotError
+    : RECOVERY.lastSnapshotAt ? `最近保存：${new Date(RECOVERY.lastSnapshotAt).toLocaleString()}` : "尚未保存快照；首次服务变更后会自动保存。";
+  $("recoveryStatus").innerHTML = `<div class="ops-item"><div class="content"><div class="title"><span class="status ${hasError ? "st-errored" : "st-online"}"><i></i>${title}</span></div><div class="detail">${esc(detail)}</div></div><div class="actions"><button class="small ${hasError ? "primary" : ""}" onclick="saveRecoverySnapshot(this)">立即保存快照</button></div></div>`;
+}
+async function saveRecoverySnapshot(button) {
+  try {
+    const result = await runBusy(button, () => api("/api/recovery/save", { method: "POST", body: {} }));
+    RECOVERY = result.recovery || RECOVERY;
+    renderRecovery();
+    toast(result.ok ? "PM2 恢复快照已保存" : "服务状态已保存，但 PM2 快照失败", !result.ok);
+  } catch (error) { toast(error.message, true); }
 }
 
 /* ---------- 日志搜索 ---------- */
