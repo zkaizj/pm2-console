@@ -18,6 +18,7 @@ const pm2 = require("pm2");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { readJson, writeJsonAtomically } = require("./lib/persistence");
 
 const HOST = process.env.CONSOLE_HOST || "127.0.0.1";
 const PORT = Number(process.env.CONSOLE_PORT || 3090);
@@ -27,23 +28,30 @@ const DSH_WORKSPACE = process.env.DSH_WORKSPACE || "D:\\ai\\dsh-workspace";
 const STATE_DIR = process.env.CONSOLE_STATE_DIR || path.join(__dirname, "data");
 const STATE_FILE = path.join(STATE_DIR, "state.json");
 const DEFAULT_CATEGORIES = ["AI 工具", "Web 服务", "Java 应用", "数据库", "工具"];
+const DEFAULT_SETTINGS = { webhookUrl: "", webhookType: "generic", alertEnabled: false, alertCooldownMin: 5, healthCheckEnabled: true };
+const DEFAULT_RECOVERY = { lastSnapshotAt: null, lastSnapshotError: null };
 
 /* ---------- 分类状态（持久化） ---------- */
-let state = { categories: [...DEFAULT_CATEGORIES], serviceCategory: {}, serviceMeta: {}, settings: { webhookUrl: "", webhookType: "generic", alertEnabled: false, alertCooldownMin: 5, healthCheckEnabled: true } };
+let state = { categories: [...DEFAULT_CATEGORIES], serviceCategory: {}, serviceMeta: {}, settings: { ...DEFAULT_SETTINGS }, recovery: { ...DEFAULT_RECOVERY } };
 function loadState() {
-  try {
-    const raw = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-    state.categories = Array.isArray(raw.categories) ? raw.categories : [...DEFAULT_CATEGORIES];
-    state.serviceCategory = raw.serviceCategory && typeof raw.serviceCategory === "object" ? raw.serviceCategory : {};
-    state.serviceMeta = raw.serviceMeta && typeof raw.serviceMeta === "object" ? raw.serviceMeta : {};
-    state.settings = Object.assign({ webhookUrl: "", webhookType: "generic", alertEnabled: false, alertCooldownMin: 5, healthCheckEnabled: true }, raw.settings || {});
-  } catch { /* 首次运行或文件损坏，用默认 */ }
+  const raw = readJson(STATE_FILE, {});
+  state = {
+    ...raw,
+    categories: Array.isArray(raw.categories) ? raw.categories : [...DEFAULT_CATEGORIES],
+    serviceCategory: raw.serviceCategory && typeof raw.serviceCategory === "object" ? raw.serviceCategory : {},
+    serviceMeta: raw.serviceMeta && typeof raw.serviceMeta === "object" ? raw.serviceMeta : {},
+    settings: Object.assign({}, DEFAULT_SETTINGS, raw.settings || {}),
+    recovery: Object.assign({}, DEFAULT_RECOVERY, raw.recovery || {})
+  };
 }
 function saveState() {
   try {
-    fs.mkdirSync(STATE_DIR, { recursive: true });
-    fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
-  } catch (e) { console.error("[pm2-console] 保存状态失败:", e.message); }
+    writeJsonAtomically(STATE_FILE, state);
+    return { ok: true };
+  } catch (e) {
+    console.error("[pm2-console] 保存状态失败:", e.message);
+    return { ok: false, error: e.message };
+  }
 }
 loadState();
 
@@ -66,6 +74,30 @@ function auth(req, res, next) {
   res.status(401).json({ error: "未授权：请在界面输入令牌（CONSOLE_TOKEN，默认 admin）" });
 }
 app.use("/api", auth);
+
+function recoveryStatus() {
+  return Object.assign({}, DEFAULT_RECOVERY, state.recovery || {});
+}
+
+function dumpPm2() {
+  return new Promise((resolve) => {
+    pm2.dump((error) => resolve(error ? { ok: false, error: error.message } : { ok: true }));
+  });
+}
+
+async function persistManagedChange() {
+  const saved = saveState();
+  if (!saved.ok) return { ok: false, error: saved.error, recovery: recoveryStatus() };
+  const dumped = await dumpPm2();
+  state.recovery = dumped.ok
+    ? { lastSnapshotAt: new Date().toISOString(), lastSnapshotError: null }
+    : { lastSnapshotAt: recoveryStatus().lastSnapshotAt, lastSnapshotError: dumped.error };
+  const recoverySaved = saveState();
+  if (!dumped.ok || !recoverySaved.ok) {
+    return { ok: false, error: dumped.error || recoverySaved.error, recovery: recoveryStatus() };
+  }
+  return { ok: true, recovery: recoveryStatus() };
+}
 
 /* ---------- 工具函数 ---------- */
 function humanBytes(b) {
@@ -198,6 +230,16 @@ app.get("/api/status", (req, res) => {
   res.json({ ok: true, pm2Connected, port: PORT, serverTime: new Date().toISOString() });
 });
 
+app.get("/api/recovery", (req, res) => {
+  res.json({ ok: true, recovery: recoveryStatus() });
+});
+app.post("/api/recovery/save", (req, res) => {
+  withPm2(res, async () => {
+    const result = await persistManagedChange();
+    res.json(result);
+  });
+});
+
 // 分类列表 + 服务归属
 app.get("/api/categories", (req, res) => {
   res.json({ categories: state.categories, serviceCategory: state.serviceCategory });
@@ -252,11 +294,17 @@ app.post("/api/processes", (req, res) => {
   if (cwd && String(cwd).trim()) opts.cwd = String(cwd).trim();
   const envObj = parseEnvText(env);
   if (Object.keys(envObj).length) opts.env = Object.assign({}, process.env, envObj);
-  if (category && String(category).trim()) state.serviceCategory[opts.name] = String(category).trim();
-  saveState();
-  pm2.start(opts, (err) => {
+  pm2.start(opts, async (err) => {
     if (err) return res.status(500).json({ error: err.message });
-    res.json({ ok: true, message: `已拉入并启动 ${opts.name}`, name: opts.name });
+    if (category && String(category).trim()) state.serviceCategory[opts.name] = String(category).trim();
+    const persistence = await persistManagedChange();
+    res.json({
+      ok: true,
+      message: `已拉入并启动 ${opts.name}`,
+      name: opts.name,
+      recovery: persistence.recovery,
+      recoveryWarning: persistence.ok ? null : persistence.error
+    });
   });
 });
 
@@ -272,9 +320,10 @@ app.post("/api/processes/:id/action", (req, res) => {
   }[action];
   if (!fn) return res.status(400).json({ error: `未知操作: ${action}` });
   withPm2(res, () => {
-    fn(pid, (err) => {
+    fn(pid, async (err) => {
       if (err) return res.status(500).json({ error: err.message });
-      res.json({ ok: true, action, id: pid });
+      const persistence = await persistManagedChange();
+      res.json({ ok: true, action, id: pid, recovery: persistence.recovery, recoveryWarning: persistence.ok ? null : persistence.error });
     });
   });
 });
@@ -489,14 +538,14 @@ app.post("/api/presets/dsh", (req, res) => {
     res.status(409).json({ error: "端口 3080 已被占用（可能旧 dsh 实例还在运行）——请先停止旧实例，或在中控台把现有 dsh-web 停掉再试" });
   });
   probe.on("error", () => {
-    state.serviceCategory["dsh-web"] = "AI 工具";
-    saveState();
     pm2.start({
       name: "dsh-web", script: process.execPath, args: [bin, "web"], cwd: DSH_WORKSPACE,
       interpreter: "none", autorestart: true, max_restarts: 20, min_uptime: "2s", kill_timeout: 10000
-    }, (err) => {
+    }, async (err) => {
       if (err) return res.status(500).json({ error: err.message });
-      res.json({ ok: true, message: "dsh-web 已拉入（分类：AI 工具）", note: "浏览器访问 http://127.0.0.1:3080" });
+      state.serviceCategory["dsh-web"] = "AI 工具";
+      const persistence = await persistManagedChange();
+      res.json({ ok: true, message: "dsh-web 已拉入（分类：AI 工具）", note: "浏览器访问 http://127.0.0.1:3080", recovery: persistence.recovery, recoveryWarning: persistence.ok ? null : persistence.error });
     });
   });
   probe.setTimeout(3000, () => { probe.destroy(); res.status(500).json({ error: "端口探测超时" }); });
@@ -609,12 +658,17 @@ app.post("/api/discover/:pid/import", async (req, res) => {
 const PROJECTS_FILE = path.join(STATE_DIR, "projects.json");
 let projects = [];
 function loadProjects() {
-  try { projects = JSON.parse(fs.readFileSync(PROJECTS_FILE, "utf8")); if (!Array.isArray(projects)) projects = []; }
-  catch { projects = []; }
+  projects = readJson(PROJECTS_FILE, []);
+  if (!Array.isArray(projects)) projects = [];
 }
 function saveProjects() {
-  try { fs.mkdirSync(STATE_DIR, { recursive: true }); fs.writeFileSync(PROJECTS_FILE, JSON.stringify(projects, null, 2), "utf8"); }
-  catch (e) { console.error("[pm2-console] 保存项目失败:", e.message); }
+  try {
+    writeJsonAtomically(PROJECTS_FILE, projects);
+    return { ok: true };
+  } catch (e) {
+    console.error("[pm2-console] 保存项目失败:", e.message);
+    return { ok: false, error: e.message };
+  }
 }
 loadProjects();
 

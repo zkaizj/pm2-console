@@ -34,3 +34,10 @@ test("desktop token resolver reads the registry without CommonJS require", () =>
   assert.match(desktopMain, /import \{[^}]*execFileSync[^}]*\} from "node:child_process";/);
   assert.doesNotMatch(desktopMain, /require\("node:child_process"\)/);
 });
+
+test("managed process changes save a PM2 recovery snapshot", () => {
+  assert.match(server, /function dumpPm2\(\)/);
+  assert.match(server, /async function persistManagedChange\(\)/);
+  assert.match(server, /app\.get\("\/api\/recovery"/);
+  assert.match(server, /app\.post\("\/api\/recovery\/save"/);
+});
