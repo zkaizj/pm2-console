@@ -26,6 +26,14 @@ module.exports.register = function register(app, ctx) {
     return Object.assign({}, item, { targetStatus: targetStatus(item) });
   }
 
+  function launch(command, args) {
+    return new Promise((resolve, reject) => {
+      const child = spawn(command, args, { detached: true, stdio: "ignore", windowsHide: false });
+      child.once("error", reject);
+      child.once("spawn", () => { child.unref(); resolve(); });
+    });
+  }
+
   app.get("/api/workbench", (req, res) => {
     res.json({
       ok: true,
@@ -95,7 +103,7 @@ module.exports.register = function register(app, ctx) {
     } catch (error) {
       return res.status(400).json({ error: error.message });
     }
-    if (!workspaceById(item.workspaceId)) return res.status(400).json({ error: "工作空间不存在" });
+    if (item.workspaceId && !workspaceById(item.workspaceId)) return res.status(400).json({ error: "工作空间不存在" });
     workbench.items.push(item);
     try {
       saveWorkbench();
@@ -114,7 +122,7 @@ module.exports.register = function register(app, ctx) {
     } catch (error) {
       return res.status(400).json({ error: error.message });
     }
-    if (!workspaceById(item.workspaceId)) return res.status(400).json({ error: "工作空间不存在" });
+    if (item.workspaceId && !workspaceById(item.workspaceId)) return res.status(400).json({ error: "工作空间不存在" });
     Object.assign(existing, item);
     try {
       saveWorkbench();
@@ -136,7 +144,7 @@ module.exports.register = function register(app, ctx) {
     }
   });
 
-  app.post("/api/workbench/items/:id/open", (req, res) => {
+  app.post("/api/workbench/items/:id/open", async (req, res) => {
     const item = itemById(req.params.id);
     if (!item) return res.status(404).json({ error: "条目不存在" });
     let target;
@@ -156,36 +164,38 @@ module.exports.register = function register(app, ctx) {
       }
     }
     try {
-      const child = spawn("explorer.exe", [target.path || item.target], {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true
-      });
-      child.unref();
-      saveWorkbench();
-      res.json({ ok: true, opened: target.kind, item: publicItem(item) });
-    } catch (error) {
-      res.status(500).json({ error: "打开目标失败: " + error.message });
-    }
+      if (target.kind === "software" && path.extname(target.path).toLowerCase() === ".exe") await launch(target.path, []);
+      else await launch("explorer.exe", [target.kind === "url" ? target.target : target.path || item.target]);
+    } catch (error) { return res.status(500).json({ error: "启动打开操作失败: " + error.message }); }
+    try { saveWorkbench(); }
+    catch (error) { return res.status(500).json({ error: "目标已打开，但最近打开时间保存失败: " + error.message }); }
+    res.json({ ok: true, opened: target.kind, item: publicItem(item) });
   });
 
-  app.post("/api/workbench/items/:id/reveal", (req, res) => {
+  app.post("/api/workbench/items/:id/reveal", async (req, res) => {
     const item = itemById(req.params.id);
     if (!item) return res.status(404).json({ error: "条目不存在" });
     const target = targetStatus(item);
-    if (target.kind !== "missing" || !target.path) return res.status(400).json({ error: "仅可显示已失效的本地目标所在文件夹" });
-    const directory = path.dirname(target.path);
-    if (!fs.existsSync(directory)) return res.status(409).json({ error: "所在文件夹也已不存在" });
+    if (!["missing", "directory", "file", "software"].includes(target.kind) || !target.path) return res.status(400).json({ error: "该条目没有可显示的本地文件夹" });
+    let directory = target.kind === "directory" ? target.path : path.dirname(target.path);
+    while (!fs.existsSync(directory) && path.dirname(directory) !== directory) directory = path.dirname(directory);
+    if (!fs.existsSync(directory)) return res.status(409).json({ error: "找不到可打开的上级文件夹" });
+    try { await launch("explorer.exe", target.kind === "missing" || target.kind === "directory" ? [directory] : [`/select,${target.path}`]); }
+    catch (error) { return res.status(500).json({ error: "打开所在文件夹失败: " + error.message }); }
+    item.lastOpenedAt = new Date().toISOString();
+    try { saveWorkbench(); }
+    catch (error) { return res.status(500).json({ error: "文件夹已打开，但最近打开时间保存失败: " + error.message }); }
+    res.json({ ok: true, opened: "directory" });
+  });
+
+  app.post("/api/workbench/workspaces/:id/open-root", async (req, res) => {
+    const workspace = workspaceById(req.params.id);
+    if (!workspace) return res.status(404).json({ error: "工作空间不存在" });
+    if (!workspace.root || !path.isAbsolute(workspace.root)) return res.status(400).json({ error: "请先填写有效的根目录" });
     try {
-      const child = spawn("explorer.exe", [directory], {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true
-      });
-      child.unref();
-      res.json({ ok: true, opened: "directory" });
-    } catch (error) {
-      res.status(500).json({ error: "打开所在文件夹失败: " + error.message });
-    }
+      if (!fs.existsSync(workspace.root) || !fs.statSync(workspace.root).isDirectory()) return res.status(409).json({ error: "工作空间根目录不存在或不是文件夹" });
+      await launch("explorer.exe", [workspace.root]);
+      res.json({ ok: true });
+    } catch (error) { res.status(500).json({ error: "打开工作空间失败: " + error.message }); }
   });
 };

@@ -33,7 +33,7 @@ const DEFAULT_SETTINGS = { webhookUrl: "", webhookType: "generic", alertEnabled:
 const DEFAULT_RECOVERY = { lastSnapshotAt: null, lastSnapshotError: null };
 
 /* ---------- 分类状态（持久化） ---------- */
-let state = { categories: [...DEFAULT_CATEGORIES], serviceCategory: {}, serviceMeta: {}, settings: { ...DEFAULT_SETTINGS }, recovery: { ...DEFAULT_RECOVERY } };
+let state = { categories: [...DEFAULT_CATEGORIES], serviceCategory: {}, serviceMeta: {}, processWatches: [], settings: { ...DEFAULT_SETTINGS }, recovery: { ...DEFAULT_RECOVERY } };
 function loadState() {
   const raw = readJson(STATE_FILE, {});
   state = {
@@ -41,6 +41,7 @@ function loadState() {
     categories: Array.isArray(raw.categories) ? raw.categories : [...DEFAULT_CATEGORIES],
     serviceCategory: raw.serviceCategory && typeof raw.serviceCategory === "object" ? raw.serviceCategory : {},
     serviceMeta: raw.serviceMeta && typeof raw.serviceMeta === "object" ? raw.serviceMeta : {},
+    processWatches: Array.isArray(raw.processWatches) ? raw.processWatches : [],
     settings: Object.assign({}, DEFAULT_SETTINGS, raw.settings || {}),
     recovery: Object.assign({}, DEFAULT_RECOVERY, raw.recovery || {})
   };
@@ -656,8 +657,8 @@ const { execFile, spawnSync, spawn } = require("child_process");
 function queryProcessesJson(pidFilter) {
   return new Promise((resolve, reject) => {
     const script = pidFilter
-      ? `Get-CimInstance Win32_Process -Filter "ProcessId=${pidFilter}" | Select-Object ProcessId,Name,ExecutablePath,CommandLine,SessionId | ConvertTo-Json -Compress`
-      : `Get-CimInstance Win32_Process | Select-Object ProcessId,Name,ExecutablePath,CommandLine,SessionId | ConvertTo-Json -Compress`;
+      ? `Get-CimInstance Win32_Process -Filter "ProcessId=${pidFilter}" | Select-Object ProcessId,Name,ExecutablePath,CommandLine,SessionId,CreationDate,ParentProcessId | ConvertTo-Json -Compress`
+      : `Get-CimInstance Win32_Process | Select-Object ProcessId,Name,ExecutablePath,CommandLine,SessionId,CreationDate,ParentProcessId | ConvertTo-Json -Compress`;
     execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
       windowsHide: true, timeout: 20000, maxBuffer: 64 * 1024 * 1024, env: Object.assign({}, process.env, { POWERSHELL_TELEMETRY_OPTOUT: "1" })
     }, (err, stdout) => {
@@ -672,57 +673,176 @@ function queryProcessesJson(pidFilter) {
   });
 }
 
-/** 系统/噪音进程：C:\Windows 路径、Session 0、无命令行、常见外壳进程 */
-const DISCOVER_EXCLUDE = new Set(["conhost.exe", "pwsh.exe", "powershell.exe", "cmd.exe", "openconsole.exe", "windowsterminal.exe", "wslhost.exe", "sihost.exe", "runtimebroker.exe", "taskhostw.exe", "applicationframehost.exe", "securityhealthsystray.exe", "explorer.exe"]);
-function isDiscoverable(p) {
-  if (!p || !p.ExecutablePath || !p.CommandLine) return false;
-  if (DISCOVER_EXCLUDE.has((p.Name || "").toLowerCase())) return false;
-  if (Number(p.SessionId) === 0) return false;                       // 服务会话
-  const exe = p.ExecutablePath.toLowerCase();
-  if (exe.startsWith("c:\\windows\\")) return false;                 // 系统目录
-  if (exe.startsWith("c:\\program files\\windowsapps")) return false; // 商店应用
-  return true;
+const PROTECTED_PROCESS_NAMES = new Set(["system", "registry", "smss.exe", "csrss.exe", "wininit.exe", "services.exe", "lsass.exe", "winlogon.exe"]);
+function processIdentity(process) {
+  return {
+    pid: Number(process.ProcessId),
+    name: String(process.Name || ""),
+    exe: process.ExecutablePath ? String(process.ExecutablePath) : null,
+    cmdline: process.CommandLine ? String(process.CommandLine) : null,
+    session: Number(process.SessionId),
+    createdAt: process.CreationDate ? String(process.CreationDate) : null,
+    parentPid: Number(process.ParentProcessId) || null
+  };
 }
 
-// 扫描本机非系统进程（排除已由 pm2 管理的）
-app.get("/api/discover", (req, res) => {
-  withPm2(res, () => {
-    pm2.list((err, list) => {
-      if (err) return res.status(500).json({ error: err.message });
-      const managedPids = new Set((list || []).map((p) => p.pid).filter(Boolean));
-      queryProcessesJson().then((procs) => {
-        const out = procs.filter(isDiscoverable).filter((p) => !managedPids.has(Number(p.ProcessId)))
-          .map((p) => ({ pid: Number(p.ProcessId), name: p.Name, exe: p.ExecutablePath, cmdline: p.CommandLine, session: Number(p.SessionId) }))
-          .sort((a, b) => a.name.localeCompare(b.name));
-        res.json({ count: out.length, processes: out });
-      }).catch((e) => res.status(500).json({ error: e.message }));
-    });
+function processProtectionReason(processData) {
+  const name = String(processData.Name || "").toLowerCase();
+  const exe = String(processData.ExecutablePath || "").toLowerCase();
+  const windowsRoot = `${String(process.env.SystemRoot || "C:\\Windows").replace(/[\\/]+$/, "")}\\`.toLowerCase();
+  if (Number(processData.SessionId) === 0) return "Windows 服务会话，受保护";
+  if (!exe || !processData.CreationDate) return "缺少可执行路径或创建时间，无法安全确认进程身份";
+  if (PROTECTED_PROCESS_NAMES.has(name)) return "Windows 核心进程，受保护";
+  if (exe.startsWith(windowsRoot)) return "Windows 系统目录进程，受保护";
+  return null;
+}
+
+function processWatchKey(process) {
+  return [String(process.ExecutablePath || "").trim().toLowerCase(), String(process.CommandLine || "").trim().replace(/\s+/g, " ").toLowerCase()].join("\n");
+}
+
+function sameProcessIdentity(expected, actual) {
+  if (!expected || !actual || !expected.createdAt || !actual.CreationDate) return false;
+  return Number(expected.pid) === Number(actual.ProcessId)
+    && String(expected.name || "").toLowerCase() === String(actual.Name || "").toLowerCase()
+    && String(expected.exe || "").toLowerCase() === String(actual.ExecutablePath || "").toLowerCase()
+    && String(expected.createdAt) === String(actual.CreationDate);
+}
+
+function listPm2Processes() {
+  return new Promise((resolve) => {
+    if (!pm2Connected) return resolve({ available: false, processes: [] });
+    pm2.list((error, processes) => resolve({ available: !error, processes: error ? [] : processes || [] }));
   });
+}
+
+async function readProcessInventory() {
+  const [processes, pm2Result] = await Promise.all([queryProcessesJson(), listPm2Processes()]);
+  const managedByPid = new Map();
+  for (const service of pm2Result.processes) {
+    const pid = Number(service.pid);
+    const pm2Id = Number(service.pm_id ?? (service.pm2_env && service.pm2_env.pm_id));
+    if (pid > 0 && Number.isInteger(pm2Id)) managedByPid.set(pid, { pm2Id, name: service.name });
+  }
+  const watches = new Set(state.processWatches.map((watch) => watch.key));
+  const out = processes.map((process) => {
+    const identity = processIdentity(process);
+    const managed = managedByPid.get(identity.pid);
+    const protectionReason = processProtectionReason(process);
+    const watchKey = processWatchKey(process);
+    return Object.assign(identity, {
+      owner: managed ? "pm2" : pm2Result.available ? "external" : "unknown",
+      pm2Id: managed ? managed.pm2Id : null,
+      pm2Name: managed ? managed.name : null,
+      protected: Boolean(protectionReason),
+      protectionReason: protectionReason || null,
+      watched: watches.has(watchKey),
+      watchKey,
+      canTerminate: pm2Result.available && !managed && !protectionReason,
+      canImport: pm2Result.available && !managed && !protectionReason && Boolean(process.ExecutablePath && process.CommandLine),
+      actionsDisabledReason: !pm2Result.available ? "PM2 状态不可确认，请稍后刷新" : null
+    });
+  }).sort((left, right) => left.name.localeCompare(right.name) || left.pid - right.pid);
+  return { pm2Available: pm2Result.available, count: out.length, processes: out };
+}
+
+app.get("/api/discover", async (req, res) => {
+  try {
+    res.json(await readProcessInventory());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-/** 停止进程：先优雅（taskkill /T），轮询确认，仍存活则强制（/F），返回是否已停止 */
-function killProcess(pid) {
-  return new Promise((resolve) => {
-    spawnSync("taskkill", ["/PID", String(pid), "/T"], { windowsHide: true, stdio: "ignore" });
-    const check = (attempt) => {
-      queryProcessesJson(pid).then((procs) => {
-        if (procs.length === 0) return resolve(true);
-        if (attempt <= 0) return resolve(false);
-        if (attempt === 4) spawnSync("taskkill", ["/F", "/PID", String(pid), "/T"], { windowsHide: true, stdio: "ignore" });
-        setTimeout(() => check(attempt - 1), 700);
-      }).catch(() => resolve(false));
-    };
-    check(6); // 最多约 4.9s；第 4 次检查时补一发强杀
-  });
-}
-
-// 关闭扫描到的进程（先优雅后强杀）
-app.post("/api/discover/:pid/kill", async (req, res) => {
+app.post("/api/discover/:pid/watch", async (req, res) => {
   try {
     const pid = Number(req.params.pid);
-    const stopped = await killProcess(pid);
-    res.json({ ok: true, pid, stopped });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    if (!Number.isInteger(pid) || pid < 1) return res.status(400).json({ error: "进程编号无效" });
+    const current = (await queryProcessesJson(pid))[0];
+    if (!current) return res.status(404).json({ error: "进程已退出，请重新扫描" });
+    const expected = req.body || {};
+    if (!sameProcessIdentity(expected, current)) return res.status(409).json({ error: "进程信息已变化，请重新扫描后操作" });
+    const pm2Result = await listPm2Processes();
+    if (!pm2Result.available) return res.status(503).json({ error: "PM2 状态不可确认，请稍后重试" });
+    if (pm2Result.processes.some((service) => Number(service.pid) === pid)) return res.status(409).json({ error: "PM2 服务请在服务详情中设置关注" });
+    const reason = processProtectionReason(current);
+    if (reason) return res.status(409).json({ error: reason });
+    const key = processWatchKey(current);
+    const index = state.processWatches.findIndex((watch) => watch.key === key);
+    const watched = expected.watched !== false;
+    if (watched && index < 0) state.processWatches.push({ id: require("crypto").randomUUID(), key, name: current.Name, exe: current.ExecutablePath, cmdline: current.CommandLine, createdAt: new Date().toISOString() });
+    if (!watched && index >= 0) state.processWatches.splice(index, 1);
+    const saved = saveState();
+    if (!saved.ok) return res.status(500).json({ error: "保存关注状态失败: " + saved.error });
+    res.json({ ok: true, watched });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/discover/watches", async (req, res) => {
+  try {
+    const processes = await queryProcessesJson();
+    const byKey = new Map();
+    processes.forEach((item) => {
+      const key = processWatchKey(item);
+      byKey.set(key, [...(byKey.get(key) || []), item]);
+    });
+    res.json({ watches: state.processWatches.map((watch) => {
+      const matches = byKey.get(watch.key) || [];
+      const current = matches.length === 1 ? matches[0] : null;
+      return { id: watch.id, name: watch.name, exe: watch.exe, cmdline: watch.cmdline, running: matches.length > 0, ambiguous: matches.length > 1, process: current ? processIdentity(current) : null, matchCount: matches.length };
+    }) });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.delete("/api/discover/watches/:id", (req, res) => {
+  const index = state.processWatches.findIndex((watch) => watch.id === req.params.id);
+  if (index < 0) return res.status(404).json({ error: "关注进程不存在" });
+  state.processWatches.splice(index, 1);
+  const saved = saveState();
+  if (!saved.ok) return res.status(500).json({ error: "保存关注状态失败: " + saved.error });
+  res.json({ ok: true });
+});
+
+async function killProcess(pid, expectedIdentity) {
+  const current = (await queryProcessesJson(pid))[0];
+  if (!current) return { stopped: true, missing: true };
+  if (!sameProcessIdentity(expectedIdentity, current)) return { stopped: false, stale: true };
+  if (processProtectionReason(current)) return { stopped: false, protected: true };
+  const graceful = spawnSync("taskkill", ["/PID", String(pid), "/T"], { windowsHide: true, stdio: "ignore" });
+  if (graceful.error) return { stopped: false, error: graceful.error.message };
+  const check = (attempt) => new Promise((resolve) => {
+    queryProcessesJson(pid).then((procs) => {
+      if (!procs.length) return resolve({ stopped: true });
+      if (!sameProcessIdentity(expectedIdentity, procs[0])) return resolve({ stopped: false, stale: true });
+      if (attempt <= 0) return resolve({ stopped: false });
+      if (attempt === 4) {
+        const forced = spawnSync("taskkill", ["/F", "/PID", String(pid), "/T"], { windowsHide: true, stdio: "ignore" });
+        if (forced.error) return resolve({ stopped: false, error: forced.error.message });
+      }
+      setTimeout(() => check(attempt - 1).then(resolve), 700);
+    }).catch((error) => resolve({ stopped: false, error: error.message }));
+  });
+  return check(6);
+}
+
+app.post("/api/discover/:pid/kill", async (req, res) => {
+  try {
+    if (!pm2Connected) return res.status(503).json({ error: "PM2 状态不可确认，暂不能结束进程" });
+    const pid = Number(req.params.pid);
+    if (!Number.isInteger(pid) || pid < 1) return res.status(400).json({ error: "进程编号无效" });
+    const current = (await queryProcessesJson(pid))[0];
+    if (!current) return res.status(404).json({ error: "进程已退出，请刷新清单" });
+    const pm2Result = await listPm2Processes();
+    if (!pm2Result.available) return res.status(503).json({ error: "PM2 状态不可确认，暂不能结束进程" });
+    if (pm2Result.processes.some((service) => Number(service.pid) === pid)) return res.status(409).json({ error: "这是 PM2 托管进程，请使用 PM2 停止操作" });
+    const outcome = await killProcess(pid, req.body || {});
+    if (outcome.stale) return res.status(409).json({ error: "PID 对应的进程已变化，未执行结束；请重新扫描" });
+    if (outcome.protected) return res.status(403).json({ error: processProtectionReason(current) || "系统进程受保护" });
+    if (!outcome.stopped) return res.status(500).json({ error: outcome.error || "进程未能结束，请查看权限或进程状态" });
+    res.json({ ok: true, pid, stopped: true });
+  } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
 function startedServiceId(result) {
@@ -785,10 +905,17 @@ app.post("/api/discover/:pid/import", (req, res) => {
   withPm2(res, async () => {
     try {
       const pid = Number(req.params.pid);
-      const { name, category, cwd, webUrl, remark, healthUrl, healthKeyword, watched } = req.body || {};
+      if (!Number.isInteger(pid) || pid < 1) return res.status(400).json({ error: "进程编号无效" });
+      const { name, category, cwd, webUrl, remark, healthUrl, healthKeyword, watched, identity } = req.body || {};
       const procs = await queryProcessesJson(pid);
       const process = procs[0];
       if (!process || !process.ExecutablePath || !process.CommandLine) return res.status(404).json({ error: `进程 ${pid} 不存在或无法读取启动命令` });
+      if (!sameProcessIdentity(identity, process)) return res.status(409).json({ error: "进程信息已变化，请重新扫描后纳管" });
+      const protectionReason = processProtectionReason(process);
+      if (protectionReason) return res.status(403).json({ error: protectionReason });
+      const pm2Result = await listPm2Processes();
+      if (!pm2Result.available) return res.status(503).json({ error: "PM2 状态不可确认，暂不能纳管进程" });
+      if (pm2Result.processes.some((service) => Number(service.pid) === pid)) return res.status(409).json({ error: "该进程已由 PM2 托管" });
       const exe = process.ExecutablePath;
       const tokens = tokenizeCommand(process.CommandLine);
       const args = tokens.length > 1 ? tokens.slice(1) : [];
@@ -830,15 +957,18 @@ app.post("/api/discover/:pid/handoff", (req, res) => {
     try {
       const pid = Number(req.params.pid);
       const serviceId = Number((req.body || {}).serviceId);
-      if (!Number.isInteger(serviceId)) return res.status(400).json({ error: "缺少有效的 PM2 服务编号" });
+      if (!Number.isInteger(pid) || pid < 1 || !Number.isInteger(serviceId)) return res.status(400).json({ error: "进程或 PM2 服务编号无效" });
       const original = (await queryProcessesJson(pid))[0];
       if (!original) return res.status(404).json({ error: "原始进程已退出，无需交接" });
+      const expectedIdentity = (req.body || {}).identity;
+      if (!sameProcessIdentity(expectedIdentity, original)) return res.status(409).json({ error: "原进程信息已变化，请重新扫描后操作" });
       const verification = await verifyManagedService(serviceId, null);
       if (!canCompleteHandoff(verification)) {
         return res.status(409).json({ error: "PM2 替代服务尚未验证通过，原进程保持运行", verification });
       }
-      const originalStopped = await killProcess(pid);
-      if (!originalStopped) return res.status(500).json({ error: "替代服务已验证，但原进程未能停止", verification, originalStopped });
+      const outcome = await killProcess(pid, processIdentity(original));
+      if (!outcome.stopped) return res.status(500).json({ error: outcome.stale ? "原进程信息已变化，未关闭" : "替代服务已验证，但原进程未能停止", verification, originalStopped: false });
+      const originalStopped = true;
       res.json({ ok: true, pid, serviceId, verification, originalStopped });
     } catch (error) {
       res.status(500).json({ error: error.message });

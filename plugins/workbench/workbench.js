@@ -1,7 +1,7 @@
 (() => {
   const TYPES = [
     ["project", "工程"], ["directory", "目录"], ["file", "文件"], ["link", "在线链接"],
-    ["account-file", "账号文件"], ["service", "托管服务"], ["other", "其他"]
+    ["account-file", "账号文件"], ["service", "托管服务"], ["software", "本机软件"], ["other", "其他"]
   ];
   const state = {
     workspaces: [], items: [], selectedWorkspaceId: localStorage.getItem("pm2-console.workbench.workspace") || "",
@@ -32,6 +32,13 @@
   function workspaceFor(item) { return state.workspaces.find((workspace) => workspace.id === item.workspaceId); }
   function selectedWorkspace() { return state.workspaces.find((workspace) => workspace.id === state.selectedWorkspaceId); }
   function selectedItem() { return state.items.find((item) => item.id === state.selectedItemId); }
+  function integrationPlugins() {
+    const plugins = typeof PLUGIN_LIST === "undefined" ? [] : PLUGIN_LIST;
+    return plugins.filter((plugin) => {
+      const adapter = window[`${plugin.id}Plugin`];
+      return plugin.enabled && adapter && typeof adapter.openWorkbenchItem === "function";
+    });
+  }
 
   function actionButton(text, handler, primary = false, danger = false) {
     const button = element("button", { className: `small${primary ? " primary" : ""}${danger ? " danger" : ""}`, text });
@@ -73,7 +80,7 @@
     clear(pane);
     pane.append(element("div", { className: "wb-pane-title", text: "工作空间" }));
     const quick = element("div", { className: "wb-filter-row" });
-    [["all", "全部"], ["starred", "收藏"], ["recent", "最近"]].forEach(([value, label]) => {
+    [["all", "全部"], ["unassigned", "未归类"], ["starred", "收藏"], ["recent", "最近"]].forEach(([value, label]) => {
       const button = actionButton(label, () => {
         state.quickFilter = value;
         state.selectedWorkspaceId = "";
@@ -99,13 +106,14 @@
       };
       pane.append(button);
     });
-    if (!state.workspaces.length) pane.append(element("div", { className: "wb-empty", text: "先创建一个工作空间，用来收纳条目。" }));
+    if (!state.workspaces.length) pane.append(element("div", { className: "wb-empty", text: "工作空间可选；也可以先直接添加常用入口。" }));
   }
 
   function visibleItems() {
     const needle = state.query.trim().toLowerCase();
     return state.items.filter((item) => {
       if (state.quickFilter === "workspace" && item.workspaceId !== state.selectedWorkspaceId) return false;
+      if (state.quickFilter === "unassigned" && item.workspaceId) return false;
       if (state.quickFilter === "starred" && !item.starred) return false;
       if (state.quickFilter === "recent" && !item.lastOpenedAt) return false;
       if (!needle) return true;
@@ -125,14 +133,14 @@
     title.append(element("strong", { text: state.quickFilter === "workspace" && selectedWorkspace() ? selectedWorkspace().name : "收纳条目" }), element("span", { className: "muted", text: `${list.length} 项` }));
     pane.append(title);
     if (!list.length) {
-      pane.append(element("div", { className: "wb-empty", text: state.workspaces.length ? "没有匹配条目，可以添加一个。" : "创建工作空间后即可添加条目。" }));
+      pane.append(element("div", { className: "wb-empty", text: "没有匹配条目，可以添加一个。" }));
       return;
     }
     list.forEach((item) => {
       const button = element("button", { className: "wb-item" });
       button.classList.toggle("active", item.id === state.selectedItemId);
       const heading = element("div", { className: "wb-item-title", text: `${item.starred ? "★ " : ""}${item.title}` });
-      const meta = element("div", { className: "wb-item-meta", text: `${typeLabel(item.type)} · ${(workspaceFor(item) || {}).name || "未知空间"}` });
+      const meta = element("div", { className: "wb-item-meta", text: `${typeLabel(item.type)} · ${(workspaceFor(item) || {}).name || "未归类"}` });
       const target = element("div", { className: "wb-item-description", text: item.serviceName || item.target || "" });
       button.append(heading, meta, target);
       button.onclick = () => { state.selectedItemId = item.id; state.detail = { kind: "item" }; renderItems(); showItemDetails(item); };
@@ -157,6 +165,10 @@
     const description = element("textarea", { value: workspace && workspace.description ? workspace.description : "", placeholder: "说明（可选）" });
     pane.append(formField("名称", name), formField("根目录", root), formField("说明", description));
     const actions = element("div", { className: "wb-form-actions" });
+    if (workspace) actions.append(actionButton("打开根目录", async () => {
+      try { await request(`/api/workbench/workspaces/${workspace.id}/open-root`, { method: "POST", body: {} }); notify("已请求打开工作空间根目录"); }
+      catch (error) { notify(error.message, true); }
+    }));
     actions.append(actionButton("保存", async () => {
       try {
         await request(workspace ? `/api/workbench/workspaces/${workspace.id}` : "/api/workbench/workspaces", {
@@ -180,12 +192,8 @@
     const pane = byId("wbDetail");
     clear(pane);
     pane.append(element("div", { className: "wb-pane-title", text: item ? "编辑收纳条目" : "新建收纳条目" }));
-    if (!state.workspaces.length) {
-      pane.append(statusMessage("请先创建工作空间。", true));
-      pane.append(actionButton("创建工作空间", () => showWorkspaceForm(null), true));
-      return;
-    }
     const workspace = element("select");
+    workspace.append(element("option", { value: "", text: "未归类（不选择工作空间）" }));
     state.workspaces.forEach((entry) => {
       const option = element("option", { value: entry.id, text: entry.name });
       option.selected = (item && item.workspaceId === entry.id) || (!item && entry.id === state.selectedWorkspaceId);
@@ -198,7 +206,7 @@
       option.selected = (item ? item.type : "project") === value;
       type.append(option);
     });
-    const target = element("input", { type: "text", value: item && item.target ? item.target : "", placeholder: "完整路径或 https:// 链接" });
+    const target = element("input", { type: "text", value: item && item.target ? item.target : "", placeholder: "文件夹/文件/程序完整路径，或 https:// 链接" });
     const service = element("select");
     service.append(element("option", { value: "", text: "选择当前 PM2 服务" }));
     const managed = typeof window.getManagedServices === "function" ? window.getManagedServices() : [];
@@ -207,20 +215,35 @@
       option.selected = item && item.serviceName === entry.name;
       service.append(option);
     });
+    const integration = element("select");
+    integration.append(element("option", { value: "", text: "快速打开（不通过插件）" }));
+    const providers = integrationPlugins();
+    providers.forEach((plugin) => {
+      const option = element("option", { value: plugin.id, text: `插件集成：${plugin.name}` });
+      option.selected = item && item.integrationPluginId === plugin.id;
+      integration.append(option);
+    });
+    if (item && item.integrationPluginId && !providers.some((plugin) => plugin.id === item.integrationPluginId)) {
+      const unavailable = element("option", { value: item.integrationPluginId, text: `插件未加载：${item.integrationPluginId}` });
+      unavailable.selected = true;
+      integration.append(unavailable);
+    }
     const description = element("textarea", { value: item && item.description ? item.description : "", placeholder: "说明（可选）" });
     const tags = element("input", { type: "text", value: item ? (item.tags || []).join(", ") : "", placeholder: "标签，用逗号分隔" });
     const starred = element("input", { type: "checkbox", checked: Boolean(item && item.starred) });
     const targetField = formField("地址", target);
     const serviceField = formField("关联服务", service);
+    const integrationField = formField("集成方式", integration);
     const accountNotice = statusMessage("账号文件只记录路径，不读取内容");
     const syncType = () => {
       const isService = type.value === "service";
       targetField.style.display = isService ? "none" : "grid";
       serviceField.style.display = isService ? "grid" : "none";
+      integrationField.style.display = type.value === "software" ? "grid" : "none";
       accountNotice.style.display = type.value === "account-file" ? "block" : "none";
     };
     type.onchange = syncType;
-    pane.append(formField("工作空间", workspace), formField("名称", title), formField("类型", type), targetField, serviceField, accountNotice, formField("说明", description), formField("标签", tags));
+    pane.append(formField("工作空间（可选）", workspace), formField("名称", title), formField("类型", type), targetField, serviceField, integrationField, accountNotice, formField("说明", description), formField("标签", tags));
     const favorite = element("label", { text: "收藏" });
     favorite.append(starred);
     pane.append(favorite);
@@ -230,7 +253,7 @@
       try {
         await request(item ? `/api/workbench/items/${item.id}` : "/api/workbench/items", {
           method: item ? "PATCH" : "POST",
-          body: { workspaceId: workspace.value, title: title.value, type: type.value, target: target.value, serviceName: service.value, description: description.value, tags: tags.value, starred: starred.checked }
+          body: { workspaceId: workspace.value, title: title.value, type: type.value, target: target.value, serviceName: service.value, integrationPluginId: integration.value, description: description.value, tags: tags.value, starred: starred.checked }
         });
         state.detail = null; await refresh(); notify("条目已保存");
       } catch (error) { notify(error.message, true); }
@@ -244,8 +267,9 @@
     const pane = byId("wbDetail");
     clear(pane);
     pane.append(element("div", { className: "wb-pane-title", text: item.title }));
-    pane.append(statusMessage(`${typeLabel(item.type)} · ${(workspaceFor(item) || {}).name || "未知空间"}`));
+    pane.append(statusMessage(`${typeLabel(item.type)} · ${(workspaceFor(item) || {}).name || "未归类"}`));
     if (item.description) pane.append(statusMessage(item.description));
+    if (item.integrationPluginId) pane.append(statusMessage(`插件集成：${item.integrationPluginId}`));
     const target = item.serviceName || item.target || "";
     pane.append(statusMessage(target));
     const status = item.targetStatus || { exists: true, kind: item.type };
@@ -255,7 +279,11 @@
     pane.append(tags, statusMessage(`最近打开：${formatDate(item.lastOpenedAt)}`));
     const actions = element("div", { className: "wb-detail-actions" });
     if (status.exists) actions.append(actionButton(item.type === "service" ? "打开服务详情" : "打开", () => openItem(item), true));
-    if (!status.exists && status.path) actions.append(actionButton("在文件夹中显示", () => revealItem(item)));
+    if (status.path && item.type !== "link" && item.type !== "service") actions.append(actionButton("打开所在文件夹", () => revealItem(item)));
+    if (item.target) actions.append(actionButton("复制地址", async () => {
+      try { await navigator.clipboard.writeText(item.target); notify("地址已复制"); }
+      catch { notify("复制失败，请检查浏览器剪贴板权限", true); }
+    }));
     actions.append(actionButton("编辑", () => showItemForm(item)));
     actions.append(actionButton("删除", async () => {
       try {
@@ -268,6 +296,14 @@
 
   async function openItem(item) {
     try {
+      if (item.integrationPluginId) {
+        const adapter = window[`${item.integrationPluginId}Plugin`];
+        if (!adapter || typeof adapter.openWorkbenchItem !== "function") throw new Error(`集成插件「${item.integrationPluginId}」未启用或未提供 openWorkbenchItem 接口`);
+        const result = await adapter.openWorkbenchItem(item);
+        if (result === false || (result && result.ok === false)) throw new Error(result && result.error || "插件未能打开该条目");
+        notify("已通过插件打开工作台条目");
+        return;
+      }
       const result = await request(`/api/workbench/items/${item.id}/open`, { method: "POST", body: {} });
       await refresh();
       if (result.action === "service") return window.workbenchPlugin.openService(result.serviceName);
@@ -300,6 +336,25 @@
       if (!service || typeof window.openServiceDetail !== "function") return notify("关联服务已不存在或尚未加载", true);
       if (typeof showModule === "function") showModule("card-overview");
       window.openServiceDetail(service.id);
+    },
+    searchEntries(query) {
+      const needle = String(query || "").trim().toLowerCase();
+      if (!needle) return [];
+      return state.items.filter((item) => [item.title, item.description, item.target, item.serviceName, ...(item.tags || [])]
+        .filter(Boolean).join(" ").toLowerCase().includes(needle))
+        .slice(0, 8).map((item) => ({ id: item.id, title: item.title, type: item.type, target: item.target, workspaceName: (workspaceFor(item) || {}).name || null, starred: item.starred, targetStatus: item.targetStatus, detail: `${typeLabel(item.type)} · ${(workspaceFor(item) || {}).name || "未归类"}` }));
+    },
+    async openEntry(id, action) {
+      const item = state.items.find((entry) => entry.id === id);
+      if (!item) { notify("工作台条目不存在", true); return false; }
+      if (action === "open") { await openItem(item); return true; }
+      if (action === "reveal") { await revealItem(item); return true; }
+      if (typeof showModule === "function") showModule("card-workbench");
+      state.selectedItemId = item.id;
+      state.detail = { kind: "item" };
+      renderItems();
+      showItemDetails(item);
+      return true;
     }
   };
 })();

@@ -105,6 +105,13 @@
   .service-tabs button.active{background:var(--accent);border-color:var(--accent);color:#fff}
   .service-detail-body{min-height:130px}
   .confirm-copy{color:var(--muted);font-size:13px;margin-bottom:10px;white-space:pre-wrap}
+  .quick-search{position:relative;margin:0 0 12px;max-width:760px}
+  .quick-search input{width:100%;padding:11px 14px;font-size:14px}
+  .quick-search-results{display:none;position:absolute;z-index:20;top:calc(100% + 4px);left:0;right:0;max-height:360px;overflow:auto;background:var(--panel);border:1px solid var(--border);border-radius:9px;box-shadow:0 12px 30px #0005}
+  .quick-search-results.open{display:block}
+  .quick-search-result{width:100%;display:block;text-align:left;padding:10px 13px;border:0;border-bottom:1px solid var(--border);border-radius:0;background:transparent}
+  .quick-search-result:hover,.quick-search-result:focus,.quick-search-result.active{background:var(--panel2)}
+  .quick-search-result small{display:block;color:var(--muted);margin-top:3px}
   @media(max-width:900px){
     .ops-summary{grid-template-columns:repeat(2,minmax(0,1fr))}
     .ops-item{align-items:flex-start;flex-direction:column}
@@ -120,7 +127,7 @@
   <div class="brand"><span class="dot" id="dshDot"></span>PM2 中控台 <span class="muted" id="connInfo" style="font-size:11px"></span></div>
   <div class="nav" id="navList">
     <button class="nav-item" data-cards="card-overview">🏥 运维总览</button>
-    <button class="nav-item" data-cards="card-pullin,card-services">📋 服务</button>
+    <button class="nav-item" data-cards="card-pullin,card-services,card-discover">📋 服务</button>
     <button class="nav-item" data-cards="card-logsearch">🔎 日志</button>
     <button class="nav-item" id="btnMoreTools">🧰 更多工具</button>
     <!-- 插件导航项由 loadPlugins() 动态注入 -->
@@ -129,6 +136,7 @@
 <div class="main">
 <div id="errBanner" style="display:none;background:#3a1d1d;border:1px solid var(--red);color:#fca5a5;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px"></div>
 <div class="sub" id="subInfo">正在连接…</div>
+<div class="quick-search"><input id="globalSearch" type="search" placeholder="快速查找服务、工作台内容、插件…（Ctrl+K）" autocomplete="off"><div class="quick-search-results" id="globalSearchResults"></div></div>
 
 <div class="chips" id="chips"></div>
 
@@ -137,11 +145,11 @@
   <div class="ops-summary" id="opsSummary"><div class="empty">加载中…</div></div>
   <section class="ops-section"><h2>待处理</h2><div id="attentionList"><div class="empty">加载中…</div></div></section>
   <section class="ops-section"><h2>关注服务</h2><div id="watchedList"><div class="empty">加载中…</div></div></section>
-  <section class="ops-section"><h2>恢复保护</h2><div id="recoveryStatus"><div class="empty">加载中…</div></div></section>
+  <section class="ops-section"><h2>PM2 快照与重启恢复</h2><div id="recoveryStatus"><div class="empty">加载中…</div></div></section>
 </div>
 
 <div class="card" id="card-pullin" data-module="1">
-  <h2>➕ 拉入新程序（填一条启动命令即可接管）</h2>
+  <h2>➕ 添加 PM2 服务（填写启动命令）</h2>
   <div class="row">
     <label>名称</label><input type="text" id="inName" placeholder="例如 my-java-app">
     <label>模板</label>
@@ -173,29 +181,29 @@
 </div>
 
 <div class="card" id="card-discover" data-module="1">
-  <h2>🔍 检测本机正在运行的进程（非系统，安全拉入 PM2）</h2>
+  <h2>🖥 本机全部进程</h2>
   <div class="row" style="margin-bottom:10px">
-    <input type="text" id="inDiscoverFilter" placeholder="按名称 / 路径过滤…">
+    <input type="text" id="inDiscoverFilter" placeholder="按名称、路径、命令行或 PID 搜索…">
+    <select id="inDiscoverOwnerFilter" style="flex:0 0 170px"><option value="all">全部进程</option><option value="pm2">PM2 托管</option><option value="external">普通进程</option><option value="protected">系统/受保护</option><option value="watched">已关注</option></select>
     <button id="btnScan">🔄 扫描</button>
-    <button id="btnClearDisc">清空</button>
     <span class="muted" id="discoverInfo"></span>
   </div>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>名称</th><th>可执行文件</th><th>命令行</th><th>PID</th><th>操作</th></tr></thead>
-      <tbody id="discTbody"><tr><td colspan="5" class="empty">点「扫描」检测本机正在运行的非系统进程（已托管的不显示）</td></tr></tbody>
+      <thead><tr><th>进程</th><th>归属/保护</th><th>可执行文件</th><th>命令行</th><th>PID</th><th>操作</th></tr></thead>
+      <tbody id="discTbody"><tr><td colspan="6" class="empty">点击「扫描」列出本机全部进程，包括系统和 PM2 托管进程</td></tr></tbody>
     </table>
   </div>
   <div class="ops-section">
-    <h2>安全交接</h2>
+    <h2>交给 PM2 管理</h2>
     <div class="row"><span class="muted" id="discoverSelected">先在上方选择一个进程</span></div>
     <div class="row" style="margin-top:8px"><label>服务名称</label><input type="text" id="discName" placeholder="选择进程后自动填写"><label>分类</label><select id="discCategory" style="flex:0 0 150px"></select></div>
     <div class="row" style="margin-top:8px"><label>备注</label><input type="text" id="discRemark" placeholder="可选，例如端口或用途"><label>页面</label><input type="text" id="discWebUrl" placeholder="可选，例如 http://127.0.0.1:8080"></div>
     <div class="row" style="margin-top:8px"><label>健康检查</label><input type="text" id="discHealthUrl" placeholder="可选，例如 http://127.0.0.1:8080/health"><label>关键字</label><input type="text" id="discHealthKeyword" placeholder="可选，例如 ok"><label>关注</label><input type="checkbox" id="discWatched" style="width:auto;flex:0 0 auto"></div>
-    <div class="row" style="margin-top:10px"><button class="primary" id="btnSafeImport" disabled>安全拉入 PM2</button><span class="hint" style="margin:0">原进程始终保留；只有替代服务验证通过后，才会显示关闭原进程按钮。</span></div>
+    <div class="row" style="margin-top:10px"><button class="primary" id="btnSafeImport" disabled>启动 PM2 替代实例</button><span class="hint" style="margin:0">这会按启动命令新建实例，不会接管原 PID；原进程只有在验证通过并再次确认后才会关闭。</span></div>
     <div id="handoffStatus" style="margin-top:10px"></div>
   </div>
-  <div class="hint">已由 PM2 管理的进程不会出现在列表里。若原进程占用了端口，替代服务会验证失败，原进程会继续运行。</div>
+  <div class="hint">系统进程仍会显示，但受保护。普通进程可加入关注、结束或按启动参数交给 PM2；若原进程占用端口，替代实例验证失败时原进程会继续运行。</div>
 </div>
 
 <div class="card" id="card-projects" data-module="1">
@@ -308,7 +316,7 @@
     <h3>🧰 更多工具</h3>
     <div class="ops-list">
       <div class="ops-item"><div class="content"><div class="title">项目发布</div><div class="detail">保留项目档案、部署历史和回滚能力。</div></div><div class="actions"><button class="small" id="btnMoreProjects">打开</button></div></div>
-      <div class="ops-item"><div class="content"><div class="title">扫描本机进程</div><div class="detail">通过安全交接方式拉入 PM2 管理。</div></div><div class="actions"><button class="small" id="btnMoreDiscovery">打开</button></div></div>
+      <div class="ops-item"><div class="content"><div class="title">本机全部进程</div><div class="detail">查看 PM2 与普通进程，关注、结束或交给 PM2 管理。</div></div><div class="actions"><button class="small" id="btnMoreDiscovery">打开</button></div></div>
       <div class="ops-item"><div class="content"><div class="title">告警设置</div><div class="detail">配置本机服务异常通知和发送测试。</div></div><div class="actions"><button class="small" id="btnAlerts">打开</button></div></div>
       <div class="ops-item"><div class="content"><div class="title">插件管理</div><div class="detail">启用或停用扩展功能。</div></div><div class="actions"><button class="small" id="btnPlugins">打开</button></div></div>
     </div>
@@ -797,38 +805,75 @@ $("btnPresetDsh").onclick = async () => {
 /* ---------- 进程发现与拉入 ---------- */
 let DISCOVER = [], DISCOVER_SELECTED = null, HANDOFF = null;
 async function scanDiscover() {
+  const button = $("btnScan");
+  button.disabled = true;
   $("discoverInfo").textContent = "扫描中…";
   try {
     const d = await api("/api/discover");
     DISCOVER = d.processes || [];
     renderDiscover();
-    $("discoverInfo").textContent = `共 ${DISCOVER.length} 个可拉入进程`;
+    $("discoverInfo").textContent = `共 ${d.count ?? DISCOVER.length} 个进程 · ${new Date().toLocaleTimeString()}${d.pm2Available ? "" : " · PM2 未连接，管理操作不可用"}`;
   } catch (e) { $("discoverInfo").textContent = "扫描失败：" + e.message; toast(e.message, true); }
+  finally { button.disabled = false; }
 }
 function renderDiscover() {
   const kw = $("inDiscoverFilter").value.trim().toLowerCase();
-  const list = kw ? DISCOVER.filter((p) => (p.name + " " + p.exe + " " + p.cmdline).toLowerCase().includes(kw)) : DISCOVER;
-  if (!list.length) { $("discTbody").innerHTML = `<tr><td colspan="5" class="empty">${DISCOVER.length ? "没有匹配的进程" : "点「扫描」检测本机进程"}</td></tr>`; return; }
+  const owner = $("inDiscoverOwnerFilter").value;
+  const list = DISCOVER.filter((p) => {
+    const matchesText = !kw || `${p.name || ""} ${p.exe || ""} ${p.cmdline || ""} ${p.pid}`.toLowerCase().includes(kw);
+    const matchesOwner = owner === "all" || (owner === "protected" ? p.protected : owner === "watched" ? p.watched : p.owner === owner);
+    return matchesText && matchesOwner;
+  });
+  if (!list.length) { $("discTbody").innerHTML = `<tr><td colspan="6" class="empty">${DISCOVER.length ? "没有匹配的进程" : "点「扫描」列出本机进程"}</td></tr>`; return; }
   $("discTbody").innerHTML = list.map((p) => `
     <tr>
       <td><b>${esc(p.name)}</b></td>
-      <td class="mono muted" title="${esc(p.exe)}">${esc(shortPath(p.exe))}</td>
-      <td class="mono muted" title="${esc(p.cmdline)}">${esc(shortPath(p.cmdline))}</td>
+      <td>${p.owner === "pm2" ? `<span class="status st-online"><i></i>PM2 · ${esc(p.pm2Name || "托管")}</span>` : p.protected ? `<span class="status st-unknown" title="${esc(p.protectionReason || "系统进程")}"><i></i>受保护</span>` : p.watched ? '<span class="status st-online"><i></i>已关注</span>' : `<span class="muted">${p.owner === "unknown" ? "归属未知" : "普通进程"}</span>`}</td>
+      <td class="mono muted" title="${esc(p.exe || "路径不可读取")}">${esc(shortPath(p.exe || "-"))}</td>
+      <td class="mono muted" title="${esc(p.cmdline || "命令行不可读取")}">${esc(shortPath(p.cmdline || "-"))}</td>
       <td class="mono">${p.pid}</td>
       <td><div class="actions">
-        <button class="small primary" onclick="selectDiscoverProcess(${p.pid})">选择并交接</button>
+        ${p.owner === "pm2" ? `<button class="small" onclick="openServiceDetail(${p.pm2Id})">详情</button><button class="small" onclick="doAction(${p.pm2Id},'restart',this)">重启</button><button class="small danger" onclick="doAction(${p.pm2Id},'stop',this)">停止</button>` : `<button class="small" onclick="toggleDiscoveredWatch(${p.pid})" ${p.protected || p.owner === "unknown" ? "disabled" : ""}>${p.watched ? "取消关注" : "加入关注"}</button>${p.canImport ? `<button class="small primary" onclick="selectDiscoverProcess(${p.pid})">交给 PM2</button>` : ""}<button class="small danger" onclick="terminateDiscoveredProcess(${p.pid})" ${p.canTerminate ? "" : `disabled title="${esc(p.protectionReason || p.actionsDisabledReason || "受保护")}"`}>结束</button>`}
       </div></td>
     </tr>`).join("");
 }
 function selectDiscoverProcess(pid) {
   const process = DISCOVER.find((item) => item.pid === pid);
-  if (!process) return toast("进程已不在列表，请重新扫描", true);
+  if (!process || !process.canImport) return toast(process ? process.protectionReason || process.actionsDisabledReason || "此进程不能纳管" : "进程已不在列表，请重新扫描", true);
   DISCOVER_SELECTED = process;
   HANDOFF = null;
   $("discName").value = process.name.replace(/\.exe$/i, "");
   $("discoverSelected").textContent = `已选择：${process.name}（PID ${process.pid}）`;
   $("btnSafeImport").disabled = false;
   $("handoffStatus").replaceChildren();
+}
+async function toggleDiscoveredWatch(pid) {
+  const process = DISCOVER.find((item) => item.pid === pid);
+  if (!process) return toast("进程已不在列表，请重新扫描", true);
+  try {
+    await api(`/api/discover/${pid}/watch`, { method: "POST", body: { ...process, watched: !process.watched } });
+    await Promise.all([scanDiscover(), loadExternalWatches()]);
+    toast(process.watched ? "已取消进程关注" : "已加入进程关注");
+  } catch (error) { toast(error.message, true); }
+}
+async function terminateDiscoveredProcess(pid) {
+  const process = DISCOVER.find((item) => item.pid === pid);
+  if (!process || !process.canTerminate) return toast("进程状态不可确认或受保护，请重新扫描", true);
+  const accepted = await new Promise((resolve) => {
+    $("confirmTitle").textContent = "结束本机进程";
+    $("confirmCopy").textContent = `将结束「${process.name}」（PID ${process.pid}），并尝试结束其子进程。未保存工作可能丢失，此操作不能撤销。`;
+    $("confirmExactName").style.display = "none";
+    $("confirmModalBg").style.display = "flex";
+    const finish = (approved) => { $("confirmModalBg").style.display = "none"; $("btnConfirmAction").onclick = null; $("btnCancelAction").onclick = null; resolve(approved); };
+    $("btnCancelAction").onclick = () => finish(false);
+    $("btnConfirmAction").onclick = () => finish(true);
+  });
+  if (!accepted) return;
+  try {
+    await api(`/api/discover/${pid}/kill`, { method: "POST", body: process });
+    toast(`进程 ${process.name} 已结束`);
+    await Promise.all([scanDiscover(), loadList(), loadHealth(), loadExternalWatches()]);
+  } catch (error) { toast(error.message, true); }
 }
 function renderHandoffStatus(result, isError = false) {
   const box = $("handoffStatus");
@@ -863,9 +908,9 @@ async function importSelectedProcess() {
   try {
     const result = await runBusy($("btnSafeImport"), () => api(`/api/discover/${process.pid}/import`, { method: "POST", body: {
       name, category, remark: $("discRemark").value.trim(), webUrl: $("discWebUrl").value.trim(), healthUrl: $("discHealthUrl").value.trim(),
-      healthKeyword: $("discHealthKeyword").value.trim(), watched: $("discWatched").checked
+      healthKeyword: $("discHealthKeyword").value.trim(), watched: $("discWatched").checked, identity: process
     } }));
-    HANDOFF = { pid: process.pid, serviceId: result.serviceId, verified: result.verification && result.verification.online && (!result.verification.health || result.verification.health.ok) };
+    HANDOFF = { pid: process.pid, identity: process, serviceId: result.serviceId, verified: result.verification && result.verification.online && (!result.verification.health || result.verification.health.ok) };
     $("btnSafeImport").disabled = true;
     await Promise.all([loadList(), loadHealth()]);
     renderHandoffStatus(result);
@@ -879,7 +924,7 @@ async function importSelectedProcess() {
 function confirmOriginalHandoff() {
   return new Promise((resolve) => {
     $("confirmTitle").textContent = "确认关闭原进程";
-    $("confirmCopy").textContent = `PM2 替代服务已经验证通过。确认后将关闭原进程（PID ${HANDOFF.pid}），由 PM2 接管运行。`;
+    $("confirmCopy").textContent = `PM2 替代实例已启动并通过验证。确认后将关闭原进程（PID ${HANDOFF.pid}），由新建的 PM2 服务继续运行。`;
     $("confirmExactName").style.display = "none";
     $("confirmModalBg").style.display = "flex";
     const finish = (approved) => {
@@ -895,7 +940,7 @@ function confirmOriginalHandoff() {
 async function completeHandoff() {
   if (!HANDOFF || !HANDOFF.verified || !(await confirmOriginalHandoff())) return;
   try {
-    await api(`/api/discover/${HANDOFF.pid}/handoff`, { method: "POST", body: { serviceId: HANDOFF.serviceId } });
+    await api(`/api/discover/${HANDOFF.pid}/handoff`, { method: "POST", body: { serviceId: HANDOFF.serviceId, identity: HANDOFF.identity } });
     toast("安全交接完成，原进程已关闭");
     HANDOFF = null;
     renderHandoffStatus({ completed: true, message: "原进程已关闭，后续由 PM2 托管运行。" });
@@ -904,8 +949,8 @@ async function completeHandoff() {
 }
 $("btnScan").onclick = scanDiscover;
 $("btnSafeImport").onclick = importSelectedProcess;
-$("btnClearDisc").onclick = () => { DISCOVER = []; $("inDiscoverFilter").value = ""; renderDiscover(); $("discoverInfo").textContent = ""; };
 $("inDiscoverFilter").oninput = renderDiscover;
+$("inDiscoverOwnerFilter").onchange = renderDiscover;
 
 /* ---------- 项目管理 ---------- */
 let PROJECTS = [], editingProj = null, depTimer = null;
@@ -1029,6 +1074,65 @@ function showModule(cardsStr) {
 }
 document.querySelectorAll(".nav-item").forEach((b) => { if (b.dataset.cards) b.onclick = () => showModule(b.dataset.cards); });
 
+let QUICK_RESULTS = [], QUICK_INDEX = -1, QUICK_SEARCH_TIMER = null;
+function searchQuickEntries(query) {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [];
+  const results = [];
+  ALL.filter((service) => [service.name, service.script, service.remark, service.category, service.webUrl].filter(Boolean).join(" ").toLowerCase().includes(needle))
+    .slice(0, 6).forEach((service) => results.push({ kind: "service", id: service.id, title: service.name, detail: `PM2 服务 · ${service.status || "状态未知"}` }));
+  if (window.workbenchPlugin && typeof window.workbenchPlugin.searchEntries === "function") {
+    window.workbenchPlugin.searchEntries(query).forEach((entry) => results.push({ kind: "workbench", id: entry.id, title: entry.title, detail: `工作台 · ${entry.detail}` }));
+  }
+  PLUGIN_LIST.filter((plugin) => plugin.enabled && `${plugin.name} ${plugin.description}`.toLowerCase().includes(needle))
+    .forEach((plugin) => results.push({ kind: "plugin", id: plugin.id, title: plugin.name, detail: "插件" }));
+  DISCOVER.filter((process) => `${process.name} ${process.exe || ""} ${process.pid}`.toLowerCase().includes(needle))
+    .slice(0, 5).forEach((process) => results.push({ kind: "process", id: process.pid, title: process.name, detail: `本机进程 · PID ${process.pid}` }));
+  return results.slice(0, 12);
+}
+function renderQuickSearch() {
+  const box = $("globalSearchResults");
+  QUICK_RESULTS = searchQuickEntries($("globalSearch").value);
+  QUICK_INDEX = -1;
+  box.replaceChildren();
+  if (!QUICK_RESULTS.length) {
+    if ($("globalSearch").value.trim()) box.append(Object.assign(document.createElement("div"), { className: "empty", textContent: DISCOVER.length ? "没有找到匹配内容" : "未找到匹配内容；本机进程请先打开进程清单并扫描" }));
+  } else QUICK_RESULTS.forEach((result, index) => {
+    const button = document.createElement("button");
+    button.className = "quick-search-result";
+    button.append(Object.assign(document.createElement("span"), { textContent: result.title }), Object.assign(document.createElement("small"), { textContent: result.detail }));
+    button.onclick = () => openQuickResult(index);
+    box.append(button);
+  });
+  box.classList.toggle("open", Boolean($("globalSearch").value.trim()));
+}
+function openQuickResult(index) {
+  const result = QUICK_RESULTS[index];
+  if (!result) return;
+  $("globalSearchResults").classList.remove("open");
+  if (result.kind === "service") openServiceDetail(result.id);
+  else if (result.kind === "workbench" && window.workbenchPlugin) window.workbenchPlugin.openEntry(result.id);
+  else if (result.kind === "plugin") showModule(`card-${result.id}`);
+  else if (result.kind === "process") { showModule("card-discover"); $("inDiscoverFilter").value = String(result.id); renderDiscover(); }
+}
+$("globalSearch").oninput = () => {
+  clearTimeout(QUICK_SEARCH_TIMER);
+  QUICK_SEARCH_TIMER = setTimeout(renderQuickSearch, 100);
+};
+$("globalSearch").onkeydown = (event) => {
+  if (event.key === "Escape") { $("globalSearchResults").classList.remove("open"); $("globalSearch").blur(); }
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    if (!QUICK_RESULTS.length) return;
+    event.preventDefault();
+    const direction = event.key === "ArrowDown" ? 1 : -1;
+    QUICK_INDEX = QUICK_INDEX < 0 ? (direction > 0 ? 0 : QUICK_RESULTS.length - 1) : (QUICK_INDEX + direction + QUICK_RESULTS.length) % QUICK_RESULTS.length;
+    [...$("globalSearchResults").querySelectorAll("button")].forEach((button, index) => button.classList.toggle("active", index === QUICK_INDEX));
+  }
+  if (event.key === "Enter" && QUICK_INDEX >= 0) openQuickResult(QUICK_INDEX);
+};
+document.addEventListener("keydown", (event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") { event.preventDefault(); $("globalSearch").focus(); $("globalSearch").select(); } });
+document.addEventListener("click", (event) => { if (!event.target.closest(".quick-search")) $("globalSearchResults").classList.remove("open"); });
+
 /* ---------- 服务备注与页面 ---------- */
 let metaProc = null;
 function openUrl(u) { if (u) window.open(u, "_blank"); }
@@ -1060,11 +1164,12 @@ $("btnSaveMeta").onclick = async () => {
 $("btnCloseMeta").onclick = () => { $("metaModalBg").style.display = "none"; };
 
 /* ---------- 运维总览、待处理与恢复保护 ---------- */
-let HEALTH = null, RECOVERY = null;
+let HEALTH = null, RECOVERY = null, EXTERNAL_WATCHES = [], HEALTH_REFRESHED_AT = null;
 async function loadHealth() {
   try {
     const data = await api("/api/health");
     HEALTH = data;
+    HEALTH_REFRESHED_AT = new Date();
     renderHealth();
   } catch (error) {
     $("ovInfo").textContent = `总览加载失败：${error.message}`;
@@ -1092,7 +1197,7 @@ function renderHealth() {
     stopped: services.filter((service) => service.status === "stopped").length,
     unmonitored: services.filter((service) => !service.hasHealth).length
   };
-  $("ovInfo").textContent = HEALTH.enabled === false ? "健康巡检已关闭" : `共 ${summary.total} 个服务`;
+  $("ovInfo").textContent = `${HEALTH.enabled === false ? "健康巡检已关闭" : `共 ${summary.total} 个服务`}${HEALTH_REFRESHED_AT ? ` · 刷新 ${HEALTH_REFRESHED_AT.toLocaleTimeString()}` : ""}`;
   $("opsSummary").innerHTML = [
     ["运行中", summary.online, "st-online"], ["异常", summary.abnormal, "st-errored"],
     ["已停止", summary.stopped, "st-stopped"], ["未配置健康检查", summary.unmonitored, "st-unknown"]
@@ -1116,15 +1221,32 @@ function renderAttention(services) {
 }
 function renderWatchedServices(services) {
   const watched = services.filter((service) => service.watched);
-  if (!watched.length) {
-    $("watchedList").innerHTML = '<div class="empty">暂无关注服务；在服务详情的「配置」中可加入关注。</div>';
-    return;
-  }
-  $("watchedList").innerHTML = `<div class="ops-list">${watched.map((service) => {
+  const serviceRows = watched.map((service) => {
     const detail = service.health ? (service.health.ok ? `健康正常 · ${service.health.latencyMs}ms` : `健康异常 · ${service.health.error || "检查失败"}`) : service.hasHealth ? "等待检查" : "未配置健康检查";
     const process = ALL.find((item) => item.name === service.name);
     return `<div class="ops-item"><div class="content"><div class="title">${esc(service.name)} <span class="status ${SCLASS[service.status] || "st-unknown"}"><i></i>${SZH[service.status] || service.status}</span></div><div class="detail">${esc(detail)}</div></div><div class="actions">${process ? `<button class="small primary" onclick="openServiceDetail(${process.id})">详情</button>` : ""}</div></div>`;
-  }).join("")}</div>`;
+  });
+  const processRows = EXTERNAL_WATCHES.map((watch) => `<div class="ops-item"><div class="content"><div class="title">${esc(watch.name)} <span class="status ${watch.ambiguous ? "st-unknown" : watch.running ? "st-online" : "st-stopped"}"><i></i>${watch.ambiguous ? `匹配到 ${watch.matchCount} 个实例` : watch.running ? "运行中" : "未运行"}</span></div><div class="detail">普通进程 · ${esc(shortPath(watch.exe || ""))}${watch.process ? ` · PID ${watch.process.pid}` : ""} · 不属于 PM2 恢复快照</div></div><div class="actions"><button class="small" onclick="showModule('card-discover');scanDiscover()">进程清单</button><button class="small danger" data-watch-id="${esc(watch.id)}">取消关注</button></div></div>`);
+  const rows = [...serviceRows, ...processRows];
+  $("watchedList").innerHTML = rows.length ? `<div class="ops-list">${rows.join("")}</div>` : '<div class="empty">暂无关注内容；可关注 PM2 服务或在本机进程清单中添加普通进程。</div>';
+  $("watchedList").querySelectorAll("[data-watch-id]").forEach((button) => { button.onclick = () => removeExternalWatch(button.dataset.watchId); });
+}
+async function loadExternalWatches() {
+  try {
+    const data = await api("/api/discover/watches");
+    EXTERNAL_WATCHES = data.watches || [];
+    if (HEALTH) renderWatchedServices(HEALTH.services || []);
+  } catch (error) {
+    EXTERNAL_WATCHES = [];
+    if (HEALTH) renderWatchedServices(HEALTH.services || []);
+  }
+}
+async function removeExternalWatch(id) {
+  try {
+    await api(`/api/discover/watches/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await loadExternalWatches();
+    toast("已取消普通进程关注");
+  } catch (error) { toast(error.message, true); }
 }
 async function ignoreAttention(id, button) {
   try {
@@ -1136,11 +1258,10 @@ async function ignoreAttention(id, button) {
 function renderRecovery() {
   if (!RECOVERY) return;
   const hasError = Boolean(RECOVERY.lastSnapshotError);
-  const title = hasError ? "最近一次 PM2 恢复快照失败" : "PM2 恢复快照受保护";
-  const detail = hasError
-    ? RECOVERY.lastSnapshotError
-    : RECOVERY.lastSnapshotAt ? `最近保存：${new Date(RECOVERY.lastSnapshotAt).toLocaleString()}` : "尚未保存快照；首次服务变更后会自动保存。";
-  $("recoveryStatus").innerHTML = `<div class="ops-item"><div class="content"><div class="title"><span class="status ${hasError ? "st-errored" : "st-online"}"><i></i>${title}</span></div><div class="detail">${esc(detail)}</div></div><div class="actions"><button class="small ${hasError ? "primary" : ""}" onclick="saveRecoverySnapshot(this)">立即保存快照</button></div></div>`;
+  const title = hasError ? "最近一次 PM2 快照保存失败" : "PM2 快照保存状态";
+  const lastSuccess = RECOVERY.lastSnapshotAt ? `最近成功：${new Date(RECOVERY.lastSnapshotAt).toLocaleString()}` : "尚无成功快照";
+  const detail = `${hasError ? `最近失败：${RECOVERY.lastSnapshotError} · ` : ""}${lastSuccess}${!hasError && !RECOVERY.lastSnapshotAt ? "；首次服务变更后会自动保存" : ""}`;
+  $("recoveryStatus").innerHTML = `<div class="ops-item"><div class="content"><div class="title"><span class="status ${hasError ? "st-errored" : "st-online"}"><i></i>${title}</span></div><div class="detail">${esc(detail)} · Windows 登录后自动恢复还需另行配置 pm2 resurrect</div></div><div class="actions"><button class="small ${hasError ? "primary" : ""}" onclick="saveRecoverySnapshot(this)">立即保存快照</button></div></div>`;
 }
 async function saveRecoverySnapshot(button) {
   try {
@@ -1343,9 +1464,10 @@ async function init() {
     const valid = document.querySelector(`.nav-item[data-cards="${saved}"]`);
     showModule(valid ? saved : "card-overview");
   }
-  await Promise.allSettled([loadCats(), loadList(), loadProjects(), loadHealth()]);
+  await Promise.allSettled([loadCats(), loadList(), loadProjects(), loadHealth(), loadExternalWatches()]);
   setInterval(loadList, 3000);
   setInterval(loadHealth, 10000);
+  setInterval(loadExternalWatches, 30000);
   await loadPlugins();
 }
 init();
